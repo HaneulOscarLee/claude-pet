@@ -435,6 +435,18 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     )
     pid = _overlay_pid()
     print(f"  INFO  overlay: {'pid %d' % pid if pid else 'stopped'}")
+
+    from . import jump
+
+    methods = jump.capabilities()
+    usable = [name for name, ok in methods.items() if ok]
+    check(
+        "click-to-jump",
+        bool(usable),
+        ", ".join(usable) if usable else "needs tmux, or wmctrl/xdotool on X11",
+    )
+    if not methods["x11"] and os.environ.get("XDG_SESSION_TYPE") == "wayland":
+        print("  INFO  a Wayland terminal cannot be raised by another app; run Claude in tmux")
     print(f"\n{'all good' if not problems else f'{problems} item(s) need attention'}")
     return 1 if problems else 0
 

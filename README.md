@@ -270,12 +270,34 @@ so this is how you get a picture of the window.
 
 | Action | Result |
 |---|---|
+| click, while it needs you | **jump to that session** (see below) |
+| click, otherwise | pin / unpin the speech bubble |
 | drag | move the pet; the position is remembered |
-| double-click | pin / unpin the speech bubble |
 | right-click | switch pack; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
 
 Clicks land only on the sprite itself — the rest of the window is
 click-through, so the pet never steals a click meant for what is underneath.
+A drag only begins once the pointer has actually travelled a few pixels, so a
+plain click stays a click.
+
+### Jumping back to a session
+
+When the pet is showing **needs you**, **done** or **failed**, the bubble adds
+`↩ click to jump` and clicking takes you to the session behind it.
+
+| Setup | What happens |
+|---|---|
+| Claude running inside **tmux** | switches to the exact pane — precise and reliable |
+| **X11 or XWayland** terminal, with `wmctrl` or `xdotool` installed | raises the terminal window |
+| **Wayland-native** terminal (GNOME Terminal on Wayland, etc.) | not possible — the pet says so |
+
+That last row is a compositor limitation, not a missing feature. Under mutter
+a client cannot raise another application's window: `org.gnome.Shell.FocusApp`,
+`.Introspect` and `.Eval` all answer `AccessDenied`, and xdg-activation needs a
+token only the target application can hand out. Running Claude inside tmux is
+the reliable answer, and gives pane-level precision as a bonus.
+
+`claude-pet doctor` reports which methods are available on your machine.
 
 ## Sprite packs
 
@@ -363,6 +385,9 @@ about **33 ms** per tool call.
 | `claude_pet/state.py` | shared state file, multi-session aggregation |
 | `claude_pet/hook.py` | hook event → pet state, overlay autostart |
 | `claude_pet/overlay.py` | GTK3 window, animation, bubble, walking, mouse-look |
+| `claude_pet/launch.py` | starting the overlay detached, shared by hook and CLI |
+| `claude_pet/locate.py` | recording where a session runs (hook side) |
+| `claude_pet/jump.py` | jumping back to it (overlay side) |
 | `claude_pet/registry.py` | codex-pets.net API client and installer |
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |
@@ -400,6 +425,12 @@ is sitting at its prompt.
 
 **The pet is silent.** With `bubble: alerts` it only speaks for needs-you, done
 and failed. The default `active` also narrates tool calls.
+
+**Clicking does not jump anywhere.** The bubble only offers `↩ click to jump`
+when a location was recorded. Sessions that started before `install-hooks` have
+none — send one prompt and it is picked up. If the bubble offers it but nothing
+happens, `claude-pet doctor` says which methods are usable; on a Wayland-native
+terminal none are.
 
 **A pack shows as `broken` in `list`.** The message names the reason. The usual
 cause is an atlas that is not 8 columns wide or whose height is not divisible

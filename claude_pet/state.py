@@ -162,7 +162,10 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
         and now - session["ts"] <= SESSION_TTL_SECONDS
     ]
     if not live:
-        return {"state": "idle", "sessions": 0, "detail": "", "cwd": "", "since": now}
+        return {
+            "state": "idle", "sessions": 0, "detail": "", "cwd": "",
+            "locator": None, "since": now,
+        }
 
     order = {name: index for index, name in enumerate(PRIORITY)}
     ranked = [(effective_state(session, now), session) for session in live]
@@ -175,5 +178,7 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
         # An expired session has nothing left to say, so drop its stale detail.
         "detail": str(winner.get("detail") or "") if state_name != "idle" else "",
         "cwd": str(winner.get("cwd") or ""),
+        # Where to jump when the pet is clicked.
+        "locator": winner.get("locator") if isinstance(winner.get("locator"), dict) else None,
         "since": winner.get("ts", now),
     }

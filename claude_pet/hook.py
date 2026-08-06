@@ -11,7 +11,12 @@ import json
 import sys
 from typing import Any
 
-from . import config, launch, state
+from . import config, launch, locate, state
+
+#: Events on which the session's location is (re)recorded. Cheap -- a handful
+#: of /proc reads -- but pointless on every tool call, and doing it on prompt
+#: submit as well means sessions that predate `install-hooks` still get one.
+LOCATE_ON = {"SessionStart", "UserPromptSubmit"}
 
 #: Hook event -> pet state. `None` means "forget this session".
 EVENT_STATES: dict[str, str | None] = {
@@ -85,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             state=pet_state,
             detail=_detail(event, payload) if pet_state else None,
             cwd=str(payload.get("cwd") or "") or None,
+            locator=locate.locator() if event in LOCATE_ON else None,
         )
     except OSError:
         return 0

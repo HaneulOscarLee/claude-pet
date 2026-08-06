@@ -30,7 +30,7 @@ for _namespace, _version in (
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
-from . import config, sprites, state  # noqa: E402
+from . import config, jump, sprites, state  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
@@ -75,6 +75,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.autostart": "Start with Claude",
         "menu.exit_idle": "Quit when no sessions",
         "menu.quit": "Quit",
+        "jump.hint": "click to jump",
     },
     "ko": {
         "idle": "대기 중",
@@ -88,6 +89,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.autostart": "클로드와 함께 시작",
         "menu.exit_idle": "세션 없으면 종료",
         "menu.quit": "종료",
+        "jump.hint": "클릭하면 이동",
     },
 }
 
@@ -103,6 +105,12 @@ def resolve_labels(language: str) -> dict[str, str]:
     return LABELS["en"]
 
 NOTIFY_ON = {"waiting", "review", "failed"}
+
+#: States where clicking the pet should take you to the session behind it.
+JUMPABLE = {"waiting", "review", "failed"}
+
+#: Pointer travel, in pixels, that turns a click into a drag.
+DRAG_THRESHOLD = 5
 
 
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
@@ -157,6 +165,11 @@ class Overlay(Gtk.Window):
         self.visual_return: str | None = None
         self.bubble_pinned = False
         self.empty_since: float | None = None
+        self.locator: dict[str, Any] | None = None
+        # A short-lived bubble override, for telling the user how a click went.
+        self.flash_text = ""
+        self.flash_until = 0.0
+        self.press_origin: tuple[int, int] | None = None
 
         self.dragging = False
         # The overlay owns its position. Reading it back from GTK on every walk
@@ -180,6 +193,7 @@ class Overlay(Gtk.Window):
         self.connect("draw", self._on_draw)
         self.connect("button-press-event", self._on_button_press)
         self.connect("button-release-event", self._on_button_release)
+        self.connect("motion-notify-event", self._on_motion)
         self.connect("configure-event", self._on_configure)
         self.connect("destroy", lambda *_: self.quit())
         self.add_events(
@@ -302,6 +316,7 @@ class Overlay(Gtk.Window):
         new_state = snapshot.get("state") or "idle"
         self.detail = snapshot.get("detail") or ""
         self.sessions = int(snapshot.get("sessions") or 0)
+        self.locator = snapshot.get("locator")
 
         if new_state == self.state:
             return
@@ -443,7 +458,7 @@ class Overlay(Gtk.Window):
         # decides how long it lasts, so the bubble cannot outlive its news.
         # Anything but idle is worth saying out loud -- while Claude works, the
         # tool name in the bubble is the most useful thing on screen.
-        if self.bubble_pinned:
+        if self.bubble_pinned or time.monotonic() < self.flash_until:
             return True
         mode = str(self.settings.get("bubble") or "active")
         if mode == "never":
@@ -453,13 +468,17 @@ class Overlay(Gtk.Window):
         return self.state != "idle"
 
     def _bubble_text(self) -> str:
-        label = self.labels.get(self.state, self.state)
-        parts = [label]
+        if time.monotonic() < self.flash_until:
+            return self.flash_text
+
+        parts = [self.labels.get(self.state, self.state)]
         if self.detail:
             parts.append(self.detail)
         text = " · ".join(parts)
         if self.sessions > 1:
             text = f"{text}  ({self.sessions} sessions)"
+        if self.state in JUMPABLE and self.locator:
+            text = f"{text}  ↩ {self.labels['jump.hint']}"
         return text
 
     def _on_draw(self, _widget, cr) -> bool:
@@ -525,21 +544,51 @@ class Overlay(Gtk.Window):
         if event.button == 3:
             self._show_menu(event)
             return True
-        if event.button == 1:
-            if event.type == Gdk.EventType._2BUTTON_PRESS:
-                self.bubble_pinned = not self.bubble_pinned
-                self._apply_input_shape()
-                return True
-            self.dragging = True
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
+        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS:
+            # Held, not committed: the drag only starts once the pointer has
+            # actually travelled, so a plain click stays available for jumping.
+            self.press_origin = (int(event.x_root), int(event.y_root))
             return True
         return False
 
+    def _on_motion(self, _widget, event) -> bool:
+        if self.press_origin is None:
+            return False
+        start_x, start_y = self.press_origin
+        if math.hypot(event.x_root - start_x, event.y_root - start_y) < DRAG_THRESHOLD:
+            return False
+        self.press_origin = None
+        self.dragging = True
+        self.begin_move_drag(1, start_x, start_y, event.time)
+        return True
+
     def _on_button_release(self, _widget, event) -> bool:
-        if event.button == 1 and self.dragging:
+        if event.button != 1:
+            return False
+        if self.press_origin is not None:
+            self.press_origin = None
+            self._on_click()
+        elif self.dragging:
             self.dragging = False
             config.save(self.settings)
         return False
+
+    def _on_click(self) -> None:
+        """Take me to whatever wants attention, or just toggle the bubble."""
+        if self.state not in JUMPABLE:
+            self.bubble_pinned = not self.bubble_pinned
+            self._apply_input_shape()
+            self.queue_draw()
+            return
+
+        result = jump.to_session(self.locator)
+        self._flash(result.message)
+
+    def _flash(self, message: str, seconds: float = 4.0) -> None:
+        self.flash_text = message
+        self.flash_until = time.monotonic() + seconds
+        self._apply_input_shape()
+        self.queue_draw()
 
     def _show_menu(self, event) -> None:
         menu = Gtk.Menu()
