@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # System Python on purpose: PyGObject comes from apt, and a
+      # setup-python interpreter cannot see it.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil xvfb
+
+      - name: Compile every module
+        run: python3 -m compileall -q claude_pet tools tests
+
+      # Stdlib only, so these need no display.
+      - name: Aggregation and liveness tests
+        run: python3 tests/test_aggregate.py
+
+      - name: Bundled pack parses
+        run: |
+          python3 - <<'PY'
+          from claude_pet import sprites
+          pet = sprites.load_pet("assets/pets/pocket")
+          missing = [n for n, f in pet.animations.items() if not f]
+          assert not missing, f"empty animation rows: {missing}"
+          assert pet.cell == (192, 208), pet.cell
+          print(f"{pet.id} v{pet.version}: {sum(pet.frame_counts.values())} frames")
+          PY
+
+      - name: Regenerating the bundled pack still parses
+        run: |
+          python3 tools/make_default_pack.py
+          python3 -c "from claude_pet import sprites; sprites.load_pet('assets/pets/pocket')"
+
+      # This is the check that earns its keep: overlay.py pins five GI
+      # namespaces, and getting one wrong stops the pet from ever appearing.
+      - name: Overlay imports under a virtual display
+        run: xvfb-run -a python3 -c "import claude_pet.overlay; print('overlay ok')"
+
+      - name: CLI runs
+        run: |
+          ./claude-pet --help > /dev/null
+          ./claude-pet list
+          ./claude-pet preview pocket -o /tmp/preview.png
+          ./claude-pet _complete -- 1 "" "claude-pet" "" | head -5
+
+      - name: Hook bridge accepts every event
+        run: |
+          for event in SessionStart UserPromptSubmit PreToolUse PostToolUse \
+                       Notification Stop SubagentStop SessionEnd; do
+            echo "{\"hook_event_name\":\"$event\",\"session_id\":\"ci\"}" \
+              | ./claude-pet hook || exit 1
+          done
+          ./claude-pet status

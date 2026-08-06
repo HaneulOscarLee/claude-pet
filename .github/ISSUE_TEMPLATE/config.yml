@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Sprite packs
+    url: https://codex-pets.net/
+    about: >
+      Packs are not hosted here. Publish yours on the gallery and it works with
+      `claude-pet add <id>` straight away.
+  - name: Contributing guide
+    url: https://github.com/HaneulOscarLee/claude-pet/blob/main/CONTRIBUTING.md
+    about: How the pieces fit, and the constraints worth knowing before patching.

@@ -18,7 +18,11 @@ from . import config, launch, locate, state
 #: submit as well means sessions that predate `install-hooks` still get one.
 LOCATE_ON = {"SessionStart", "UserPromptSubmit"}
 
-#: Hook event -> pet state. `None` means "forget this session".
+#: Sentinel: report the detail but leave the state as it was.
+KEEP = "__keep__"
+
+#: Hook event -> pet state. `None` means "forget this session", `KEEP` means
+#: "this says nothing about whether Claude is working".
 EVENT_STATES: dict[str, str | None] = {
     "SessionStart": "waving",
     "UserPromptSubmit": "running",
@@ -26,7 +30,10 @@ EVENT_STATES: dict[str, str | None] = {
     "PostToolUse": "running",
     "Notification": "waiting",
     "Stop": "review",
-    "SubagentStop": "running",
+    # A subagent finishing does not mean the main agent is working -- and
+    # background subagents finish *after* Stop, which used to re-arm `running`
+    # on a turn that was already over and leave the pet stuck there.
+    "SubagentStop": KEEP,
     "PreCompact": "running",
     "PostCompact": "running",
     "SessionEnd": None,
@@ -84,14 +91,18 @@ def main(argv: list[str] | None = None) -> int:
         pet_state = "failed"
 
     session_id = str(payload.get("session_id") or "default")
+    fields: dict[str, Any] = {
+        "detail": _detail(event, payload) if pet_state else None,
+        "cwd": str(payload.get("cwd") or "") or None,
+        "locator": locate.locator() if event in LOCATE_ON else None,
+    }
+    # Omitting `state` entirely leaves the stored one alone; passing None
+    # deletes the session.
+    if pet_state != KEEP:
+        fields["state"] = pet_state
+
     try:
-        state.update(
-            session_id,
-            state=pet_state,
-            detail=_detail(event, payload) if pet_state else None,
-            cwd=str(payload.get("cwd") or "") or None,
-            locator=locate.locator() if event in LOCATE_ON else None,
-        )
+        state.update(session_id, **fields)
     except OSError:
         return 0
 

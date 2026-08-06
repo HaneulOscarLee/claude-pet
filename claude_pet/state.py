@@ -30,10 +30,20 @@ SESSION_TTL_SECONDS = 6 * 60 * 60
 
 #: How long a state stays interesting *for the session that reported it*.
 #: Past this, that session counts as idle when aggregating, so a finished
-#: session announces itself and then stops speaking for the others. States
-#: absent here never expire: `waiting` must keep asking, and `running` ends
-#: only when Claude says so.
-DWELL_SECONDS: dict[str, float] = {"waving": 3.0, "review": 20.0, "failed": 20.0}
+#: session announces itself and then stops speaking for the others.
+#:
+#: `waiting` is deliberately absent: a pet that stops asking for you defeats
+#: the point. `running` has a deliberately generous one -- it is a backstop,
+#: not a mechanism. Claude normally leaves `running` by reporting Stop, but any
+#: event arriving after a turn ends would otherwise re-arm it forever, so this
+#: guarantees the pet unsticks itself. Long enough that a slow think between
+#: tool calls does not read as idle.
+DWELL_SECONDS: dict[str, float] = {
+    "waving": 3.0,
+    "review": 20.0,
+    "failed": 20.0,
+    "running": 300.0,
+}
 
 
 def state_dir() -> Path:

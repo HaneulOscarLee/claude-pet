@@ -1,0 +1,62 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nearly every bug in this project so far has been environment-specific,
+        so the two command outputs below usually contain the answer.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+      placeholder: |
+        The pet stays on "working" after the turn has finished.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`claude-pet doctor` output"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`claude-pet status` output"
+      description: Taken while the problem is visible, if you can.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop
+      description: Distro, desktop environment, and X11 or Wayland.
+      placeholder: Ubuntu 24.04, GNOME 46, Wayland
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal, and whether Claude runs inside tmux
+      placeholder: GNOME Terminal, no tmux
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Overlay log
+      description: "`tail -30 ~/.local/state/claude-pet/overlay.log`, if there is anything in it."
+      render: text
+    validations:
+      required: false

@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest something the pet should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should it do
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: What are you trying to tell at a glance
+      description: |
+        The pet exists to answer "does Claude need me right now" without
+        switching windows. Ideas that sharpen that tend to fit; ideas that add
+        another thing to read tend not to.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Does it need anything new?
+      options:
+        - label: A new dependency
+        - label: Reading something other than Claude Code's hooks
+        - label: Work in the hook path (which runs on every tool call)

@@ -36,9 +36,14 @@ CASES = [
     ("failed 25s old + running", {"a": session("failed", 25), "b": session("running", 1)}, "running"),
     ("waving 1s old", {"c": session("waving", 1)}, "waving"),
     ("waving 10s old", {"c": session("waving", 10)}, "idle"),
-    # These two have no dwell: waiting must keep asking, and only Claude ends a run.
-    ("waiting 300s old", {"c": session("waiting", 300)}, "waiting"),
-    ("running 300s old", {"c": session("running", 300)}, "running"),
+    # waiting has no dwell at all: a pet that stops asking defeats the point.
+    ("waiting 3h old", {"c": session("waiting", 10800)}, "waiting"),
+    # running has a generous one, as a backstop against an event arriving after
+    # a turn ended and re-arming it forever.
+    ("running 100s old", {"c": session("running", 100)}, "running"),
+    ("running 400s old", {"c": session("running", 400)}, "idle"),
+    ("stale running loses to fresh review",
+     {"a": session("running", 400), "b": session("review", 2)}, "review"),
     ("every session expired", {"a": session("review", 25), "b": session("failed", 25)}, "idle"),
     ("no sessions", {}, "idle"),
     ("unknown state name", {"a": {"state": "nonsense", "ts": NOW}}, "idle"),

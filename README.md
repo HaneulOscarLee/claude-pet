@@ -1,5 +1,7 @@
 # claude-pet
 
+[![CI](https://github.com/HaneulOscarLee/claude-pet/actions/workflows/ci.yml/badge.svg)](https://github.com/HaneulOscarLee/claude-pet/actions/workflows/ci.yml)
+
 **A desktop pet for [Claude Code](https://claude.com/claude-code), on Linux.**
 
 An always-on-top sprite sits on your desktop and reacts to what Claude Code is
@@ -494,6 +496,16 @@ claude-pet stop
 claude-pet uninstall-hooks
 rm -rf ~/.config/claude-pet ~/.local/state/claude-pet ~/.claude/pets
 ```
+
+## Contributing
+
+Patches and bug reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md),
+which covers how the pieces fit and the handful of constraints worth knowing
+before changing anything (chiefly: the hook path runs on every tool call and
+must stay stdlib-only and fast).
+
+Bug reports should include `claude-pet doctor` and `claude-pet status`. Almost
+every problem here has turned out to be environment-specific.
 
 ## Credits
 

@@ -100,6 +100,42 @@ LABELS: dict[str, dict[str, str]] = {
 }
 
 
+#: Things the pet can say per state, one picked when the state is entered.
+#: `{tool}` is filled with the tool Claude is using, when there is one.
+PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "en": {
+        "idle": ("nothing running", "all quiet", "waiting for you"),
+        "running": ("working", "on it", "{tool}…", "busy with {tool}"),
+        "waiting": ("needs you",),
+        "review": ("done", "all yours", "have a look"),
+        "failed": ("that failed", "something broke"),
+        "waving": ("hello", "session started"),
+    },
+    "ko": {
+        "idle": ("할 일 없음", "조용함", "기다리는 중"),
+        "running": ("작업 중", "하는 중", "{tool} 중", "{tool} 돌리는 중"),
+        "waiting": ("입력 대기",),
+        "review": ("응답 완료", "다 됐어요", "확인해 주세요"),
+        "failed": ("실패했어요", "뭔가 깨졌어요"),
+        "waving": ("안녕", "세션 시작"),
+    },
+}
+
+#: Below this, saying how long something has been going is just noise.
+ELAPSED_FLOOR_SECONDS = 45
+
+
+def resolve_phrases(language: str) -> dict[str, tuple[str, ...]]:
+    if language in PHRASES:
+        return PHRASES[language]
+    if language == "auto":
+        for variable in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            value = os.environ.get(variable, "")
+            if value:
+                return PHRASES.get(value.split("_")[0].lower(), PHRASES["en"])
+    return PHRASES["en"]
+
+
 def resolve_labels(language: str) -> dict[str, str]:
     if language in LABELS:
         return LABELS[language]
@@ -160,7 +196,12 @@ class Overlay(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.view = view
         self.settings = settings
-        self.labels = resolve_labels(str(settings.get("language") or "auto"))
+        language = str(settings.get("language") or "auto")
+        self.labels = resolve_labels(language)
+        self.phrases = resolve_phrases(language)
+        self.phrase = ""
+        self.project = ""
+        self.since = time.time()
 
         self.state = "idle"
         self.detail = ""
@@ -326,6 +367,8 @@ class Overlay(Gtk.Window):
         self.detail = snapshot.get("detail") or ""
         self.sessions = int(snapshot.get("sessions") or 0)
         self.locator = snapshot.get("locator")
+        self.project = Path(str(snapshot.get("cwd") or "")).name
+        self.since = float(snapshot.get("since") or time.time())
 
         if new_state == self.state:
             return
@@ -333,6 +376,9 @@ class Overlay(Gtk.Window):
         self.state = new_state
         self.frame_index = 0
         self.walking = 0
+
+        options = self.phrases.get(new_state) or (self.labels.get(new_state, new_state),)
+        self.phrase = random.choice(options)
 
         intro = INTRO.get(new_state)
         if intro and self.view.animations.get(intro):
@@ -485,10 +531,26 @@ class Overlay(Gtk.Window):
         if time.monotonic() < self.flash_until:
             return self.flash_text
 
-        parts = [self.labels.get(self.state, self.state)]
-        if self.detail:
-            parts.append(self.detail)
-        text = " · ".join(parts)
+        fallback = self.labels.get(self.state, self.state)
+        phrase = self.phrase or fallback
+
+        if "{tool}" in phrase:
+            # The phrase is built around a tool name, so it needs one.
+            text = phrase.format(tool=self.detail) if self.detail else fallback
+        elif self.detail:
+            text = f"{phrase} · {self.detail}"
+        else:
+            text = phrase
+
+        # `waiting` carries Claude's own prose, which is long and already the
+        # most useful thing on screen; leave it room.
+        if self.state != "waiting":
+            if self.project:
+                text = f"{text} · {self.project}"
+            elapsed = time.time() - self.since
+            if self.state == "running" and elapsed >= ELAPSED_FLOOR_SECONDS:
+                text = f"{text} · {int(elapsed // 60)}m"
+
         if self.sessions > 1:
             text = f"{text}  ({self.sessions} sessions)"
         if self.state in JUMPABLE and self.locator:
