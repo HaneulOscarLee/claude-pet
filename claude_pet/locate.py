@@ -63,9 +63,28 @@ def terminal_candidates() -> list[int]:
     return [pid for pid in ancestor_pids() if _comm(pid) not in _TRANSPARENT]
 
 
+#: `comm` of the Claude Code process. Recorded separately as the session's
+#: liveness signal: the rest of the ancestor chain is useless for that, since
+#: it ends at systemd, which never exits.
+CLAUDE_COMM = "claude"
+
+
+def claude_pid() -> int | None:
+    """Nearest ancestor that is the Claude Code process itself."""
+    for pid in ancestor_pids():
+        if _comm(pid) == CLAUDE_COMM:
+            return pid
+    return None
+
+
 def locator() -> dict[str, Any]:
     """Everything known about where this session is running."""
-    found: dict[str, Any] = {"pids": ancestor_pids()[:_MAX_DEPTH]}
+    chain = ancestor_pids()[:_MAX_DEPTH]
+    found: dict[str, Any] = {"pids": chain}
+
+    owner = claude_pid()
+    if owner is not None:
+        found["claude_pid"] = owner
 
     pane = os.environ.get("TMUX_PANE")
     tmux = os.environ.get("TMUX")

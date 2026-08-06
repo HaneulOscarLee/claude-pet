@@ -5,6 +5,7 @@ Plain stdlib, no test runner needed:
     python3 tests/test_aggregate.py
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -44,6 +45,43 @@ CASES = [
 ]
 
 
+#: A pid that certainly is not a Claude process. pid 1 is init, and it is alive,
+#: so it also proves the check looks at `comm` and not merely at existence.
+DEAD_PID = 2**22 - 1
+
+
+def liveness_checks() -> list[tuple[str, bool]]:
+    """A session outlives its Claude process only until someone looks."""
+    own_pid = os.getpid()
+    results = []
+
+    gone = {"state": "running", "ts": NOW, "locator": {"claude_pid": DEAD_PID}}
+    results.append(("dead claude pid is not live", not state.is_alive(gone, NOW)))
+    results.append(
+        ("dead session leaves no state", state.aggregate({"sessions": {"a": gone}})["state"] == "idle")
+    )
+    results.append(
+        ("dead session is not counted", state.aggregate({"sessions": {"a": gone}})["sessions"] == 0)
+    )
+
+    # This test process is alive but is not named "claude", so a pid that exists
+    # is still rejected unless it really is a Claude session.
+    impostor = {"state": "running", "ts": NOW, "locator": {"claude_pid": own_pid}}
+    results.append(("live pid with wrong comm is not live", not state.is_alive(impostor, NOW)))
+
+    no_locator = {"state": "running", "ts": NOW}
+    results.append(("session without a locator is trusted", state.is_alive(no_locator, NOW)))
+
+    empty_locator = {"state": "running", "ts": NOW, "locator": {}}
+    results.append(("locator without a pid is trusted", state.is_alive(empty_locator, NOW)))
+
+    mixed = {"sessions": {"dead": gone, "live": session("waiting", 1)}}
+    aggregated = state.aggregate(mixed)
+    results.append(("live session survives a dead one", aggregated["state"] == "waiting"))
+    results.append(("only live sessions counted", aggregated["sessions"] == 1))
+    return results
+
+
 def main() -> int:
     failures = 0
     for label, sessions, expected in CASES:
@@ -64,7 +102,12 @@ def main() -> int:
     failures += not ok
     print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
 
-    total = len(CASES) + 2
+    live_results = liveness_checks()
+    for name, ok in live_results:
+        failures += not ok
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+
+    total = len(CASES) + 2 + len(live_results)
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 

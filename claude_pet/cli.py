@@ -250,9 +250,32 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"active pet: {settings.get('pet') or '(auto)'}")
     print(f"state file: {state.state_path()}")
 
+    if settings.get("exit_when_no_sessions", True):
+        grace = settings.get("exit_grace_seconds") or 0
+        if snapshot["sessions"]:
+            print(f"auto-exit : on, {grace}s after the last session ends")
+        else:
+            print(f"auto-exit : on, overlay quits within {grace}s")
+    else:
+        print("auto-exit : off")
+
+    import time as _time
+
+    now = _time.time()
     data = state.read()
-    for session_id, session in data.get("sessions", {}).items():
-        print(f"  {session_id[:8]}  {session.get('state'):<8} {session.get('detail') or ''}")
+    entries = data.get("sessions", {})
+    if entries:
+        print("sessions  :")
+    for session_id, session in entries.items():
+        if not isinstance(session, dict):
+            continue
+        alive = state.is_alive(session, now)
+        where = (session.get("locator") or {}).get("claude_pid")
+        note = "" if alive else "  DEAD (claude process gone, will be dropped)"
+        print(
+            f"  {session_id[:8]}  {str(session.get('state')):<8} "
+            f"{session.get('detail') or '':<28} pid={where or '?'}{note}"
+        )
     return 0
 
 

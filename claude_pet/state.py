@@ -79,10 +79,38 @@ def _write(data: dict[str, Any]) -> None:
         raise
 
 
+def is_alive(session: dict[str, Any], now: float) -> bool:
+    """Whether a session should still be counted.
+
+    `SessionEnd` is the clean signal, but it does not arrive when Claude is
+    killed outright -- a terminal closed with its window button, a reboot, a
+    crash. Without a second check those sessions would linger for the whole TTL
+    and the pet would never notice everything had gone away. So the recorded
+    Claude pid is verified directly: if that process is gone, so is the session.
+    """
+    timestamp = session.get("ts")
+    if not isinstance(timestamp, (int, float)) or now - timestamp > SESSION_TTL_SECONDS:
+        return False
+
+    locator = session.get("locator")
+    if not isinstance(locator, dict):
+        return True  # nothing recorded (pre-locator session): trust the TTL
+    pid = locator.get("claude_pid")
+    if not isinstance(pid, int):
+        return True
+
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as stream:
+            # The comm check guards against the pid being reused by something
+            # unrelated between the session dying and us looking.
+            return stream.read().strip() == "claude"
+    except OSError:
+        return False
+
+
 def _prune(sessions: dict[str, Any], now: float) -> None:
     for session_id, session in list(sessions.items()):
-        timestamp = session.get("ts")
-        if not isinstance(timestamp, (int, float)) or now - timestamp > SESSION_TTL_SECONDS:
+        if not isinstance(session, dict) or not is_alive(session, now):
             sessions.pop(session_id, None)
 
 
@@ -157,9 +185,7 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
     live = [
         session
         for session in data.get("sessions", {}).values()
-        if isinstance(session, dict)
-        and isinstance(session.get("ts"), (int, float))
-        and now - session["ts"] <= SESSION_TTL_SECONDS
+        if isinstance(session, dict) and is_alive(session, now)
     ]
     if not live:
         return {

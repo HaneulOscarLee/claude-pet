@@ -77,7 +77,11 @@ After `install-hooks` you never start or stop the pet by hand:
 - **starts with Claude** — the `SessionStart` hook launches the overlay
   detached, so it survives the terminal that started it
 - **quits with Claude** — once every session has ended, the pet waits out a
-  60 second grace period (in case you are just reopening a terminal) and exits
+  60 second grace period (in case you are just reopening a terminal) and exits.
+  `SessionEnd` is the clean signal, but it never arrives when Claude is killed
+  outright — a terminal closed with its window button, a crash, a reboot — so
+  each session's Claude pid is recorded and checked directly. A session whose
+  process is gone stops counting immediately, whether or not it said goodbye.
 
 Both are on by default and can be toggled from the pet's right-click menu, or
 with `claude-pet set autostart false` / `set exit_when_no_sessions false`.
@@ -425,6 +429,12 @@ is sitting at its prompt.
 
 **The pet is silent.** With `bubble: alerts` it only speaks for needs-you, done
 and failed. The default `active` also narrates tool calls.
+
+**The pet does not exit when I close Claude.** Give it `exit_grace_seconds`
+(60 by default) — closing a terminal and checking a few seconds later is too
+soon. `claude-pet status` shows the auto-exit setting and lists every session
+it still counts, marking any whose Claude process has died. If a session lingers
+there with a live pid, that Claude really is still running somewhere.
 
 **Clicking does not jump anywhere.** The bubble only offers `↩ click to jump`
 when a location was recorded. Sessions that started before `install-hooks` have
