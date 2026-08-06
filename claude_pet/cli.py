@@ -534,7 +534,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     running = _overlay_pid() is not None
     if getattr(args, "fix", False):
-        return _finish_setup()
+        return _finish_setup(install_deps=not getattr(args, "no_deps", False))
 
     if next_steps or not running:
         print("Nothing broken. Run `claude-pet doctor --fix` to finish setting up, or:")
@@ -614,43 +614,51 @@ def _link_launcher() -> None:
         _ensure_local_bin_on_path()
 
 
-#: Marker so the PATH line is added at most once and can be found again.
-RC_MARKER = "# added by claude-pet"
+#: Markers so each rc block is added at most once and can be found again.
+RC_MARKER_PATH = "# added by claude-pet (PATH)"
+RC_MARKER_COMPLETION = "# added by claude-pet (completion)"
 
-#: Shell -> rc file, for putting ~/.local/bin on PATH.
+#: Shell -> rc file.
 RC_FILES = {"zsh": ".zshrc", "bash": ".bashrc", "": ".profile"}
 
 
+def rc_path() -> Path:
+    shell = Path(os.environ.get("SHELL", "")).name
+    return Path.home() / RC_FILES.get(shell, RC_FILES[""])
+
+
+def rc_has(marker: str) -> bool:
+    target = rc_path()
+    try:
+        return marker in target.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def _append_rc_block(marker: str, body: str, description: str) -> bool:
+    """Append a marked block to the user's shell rc, at most once."""
+    target = rc_path()
+    if rc_has(marker):
+        print(f"  {target} already has the {description} block")
+        return True
+    try:
+        with target.open("a", encoding="utf-8") as stream:
+            stream.write(f"\n{marker}\n{body}")
+    except OSError as exc:
+        print(f"claude-pet: could not update {target}: {exc}", file=sys.stderr)
+        return False
+    print(f"  added {description} to {target}")
+    return True
+
+
 def _ensure_local_bin_on_path() -> None:
-    """Append the PATH line to the user's shell rc, once.
+    """Put ~/.local/bin on PATH via the shell rc.
 
     Ubuntu's ~/.profile adds ~/.local/bin only if it already existed at login,
     so creating it now is not enough -- without this, `claude-pet` keeps working
     only as `./claude-pet` until the user edits a dotfile themselves.
     """
-    shell = Path(os.environ.get("SHELL", "")).name
-    rc_path = Path.home() / RC_FILES.get(shell, RC_FILES[""])
-
-    try:
-        existing = rc_path.read_text(encoding="utf-8") if rc_path.exists() else ""
-    except OSError as exc:
-        print(f"claude-pet: could not read {rc_path}: {exc}", file=sys.stderr)
-        return
-
-    if RC_MARKER in existing:
-        print(f"  {rc_path} already sets PATH; run `exec $SHELL` to pick it up")
-        return
-
-    line = f'\n{RC_MARKER}\nexport PATH="$HOME/.local/bin:$PATH"\n'
-    try:
-        with rc_path.open("a", encoding="utf-8") as stream:
-            stream.write(line)
-    except OSError as exc:
-        print(f"claude-pet: could not update {rc_path}: {exc}", file=sys.stderr)
-        print('  add this yourself: export PATH="$HOME/.local/bin:$PATH"')
-        return
-    print(f"  added ~/.local/bin to PATH in {rc_path}")
-    print("  run `exec $SHELL` (or open a new terminal) to use `claude-pet` directly")
+    _append_rc_block(RC_MARKER_PATH, 'export PATH="$HOME/.local/bin:$PATH"\n', "PATH")
 
 
 def completion_target() -> Path:
@@ -659,11 +667,12 @@ def completion_target() -> Path:
 
 
 def completion_installed() -> bool:
-    target = completion_target()
-    try:
-        return target.is_symlink() and target.resolve() == _completion_source().resolve()
-    except OSError:
-        return False
+    """Whether tab completion will actually be active in a new shell.
+
+    The rc block is what makes that true everywhere: `bash-completion` may not
+    be installed, and zsh does not read that directory at all.
+    """
+    return rc_has(RC_MARKER_COMPLETION)
 
 
 def _completion_source() -> Path:
@@ -675,20 +684,80 @@ def _install_completion() -> None:
     if not source.is_file():
         print(f"claude-pet: {source} is missing", file=sys.stderr)
         return
+    # The standard location, for bash users who have bash-completion.
     target = completion_target()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_symlink() or target.exists():
             target.unlink()
         target.symlink_to(source)
+        print(f"  linked {target}")
     except OSError as exc:
-        print(f"claude-pet: could not install completion: {exc}", file=sys.stderr)
+        print(f"claude-pet: could not link completion: {exc}", file=sys.stderr)
+
+    # And an rc block, which is what makes it work regardless of that.
+    body = (
+        f'if [ -f "{source}" ]; then\n'
+        '  if [ -n "${ZSH_VERSION:-}" ]; then autoload -U +X bashcompinit && bashcompinit; fi\n'
+        f'  . "{source}"\n'
+        "fi\n"
+    )
+    if _append_rc_block(RC_MARKER_COMPLETION, body, "completion"):
+        print("  run `exec $SHELL` (or open a new terminal) to get tab completion")
+
+
+#: Command that installs the helper click-to-jump needs outside tmux.
+JUMP_HELPER_COMMANDS = (
+    ("apt-get", ["sudo", "apt-get", "install", "-y", "wmctrl"]),
+    ("dnf", ["sudo", "dnf", "install", "-y", "wmctrl"]),
+    ("pacman", ["sudo", "pacman", "-S", "--noconfirm", "wmctrl"]),
+    ("zypper", ["sudo", "zypper", "--non-interactive", "install", "wmctrl"]),
+)
+
+
+def jump_helper_present() -> bool:
+    from . import jump
+
+    return jump.capabilities()["x11"]
+
+
+def _install_jump_helper() -> None:
+    """Install wmctrl, which is what lets a click raise a non-tmux terminal.
+
+    Needs root, so it is the one step that can prompt. Skipped without a
+    terminal, since a sudo password prompt would hang a script or a hook.
+    """
+    import subprocess
+    from shutil import which
+
+    from . import jump
+
+    if jump.capabilities()["x11"]:
         return
-    print(f"  linked {target}")
-    print("  run `exec $SHELL` (or open a new terminal) to get tab completion")
+
+    command = next((cmd for manager, cmd in JUMP_HELPER_COMMANDS if which(manager)), None)
+    if command is None:
+        return
+
+    printable = " ".join(command)
+    if not sys.stdin.isatty():
+        print(f"  for click-to-jump outside tmux, run: {printable}")
+        return
+
+    print(f"  running: {printable}")
+    print("  (sudo may ask for your password; Ctrl+C to skip)")
+    try:
+        subprocess.run(command, check=False)  # noqa: S603 - fixed argv, no shell
+    except (OSError, KeyboardInterrupt):
+        print("  skipped; run it yourself later if you want click-to-jump")
+        return
+    if which("wmctrl"):
+        print("  wmctrl installed: clicking the pet can now raise the terminal")
+    else:
+        print(f"  wmctrl not installed; run `{printable}` yourself if you want it")
 
 
-def _finish_setup() -> int:
+def _finish_setup(install_deps: bool = True) -> int:
     """Do everything a fresh checkout still needs, then start the pet."""
     from . import launch, registry, sprites
 
@@ -701,7 +770,7 @@ def _finish_setup() -> int:
     linked = launcher_on_path()
     completed = completion_installed()
 
-    if has_pack and has_hooks and running and linked and completed:
+    if has_pack and has_hooks and running and linked and completed and jump_helper_present():
         print("Nothing to do: pack installed, hooks in place, on PATH, pet running.")
         return 0
 
@@ -712,6 +781,10 @@ def _finish_setup() -> int:
     if not completed:
         print("installing shell completion...")
         _install_completion()
+
+    if install_deps and not jump_helper_present():
+        print("enabling click-to-jump outside tmux...")
+        _install_jump_helper()
 
     if not has_pack:
         print(f"installing pack {DEFAULT_PACK}...")
@@ -813,9 +886,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="install a pack and the hooks, link onto PATH, and start the pet",
     )
+    doctor.add_argument(
+        "--no-deps", action="store_true", help="skip installing wmctrl (needs sudo)"
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     setup = subparsers.add_parser("setup", help="one-command setup (same as doctor --fix)")
+    setup.add_argument("--no-deps", action="store_true", help="skip installing wmctrl")
     setup.set_defaults(func=cmd_doctor, fix=True)
 
     setter = subparsers.add_parser("set", help="change a setting")

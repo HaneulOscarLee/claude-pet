@@ -178,6 +178,7 @@ class Overlay(Gtk.Window):
         self.press_origin: tuple[int, int] | None = None
 
         self.dragging = False
+        self.hovered = False
         # The overlay owns its position. Reading it back from GTK on every walk
         # step accumulates frame-vs-client offset error and the pet drifts off
         # the floor and past its bounds.
@@ -200,6 +201,8 @@ class Overlay(Gtk.Window):
         self.connect("button-press-event", self._on_button_press)
         self.connect("button-release-event", self._on_button_release)
         self.connect("motion-notify-event", self._on_motion)
+        self.connect("enter-notify-event", self._on_enter)
+        self.connect("leave-notify-event", self._on_leave)
         self.connect("configure-event", self._on_configure)
         self.connect("destroy", lambda *_: self.quit())
         self.add_events(
@@ -401,6 +404,10 @@ class Overlay(Gtk.Window):
     def _update_walk(self, now: float) -> None:
         if not self.settings.get("walk", True):
             return
+        # Never wander while being touched: move() during a drag fights the
+        # window manager, and a pet that walks off is one you cannot catch.
+        if self.hovered or self.dragging or self.press_origin is not None:
+            return
 
         if self.walking and now >= self.walk_until:
             self.walking = 0
@@ -554,8 +561,35 @@ class Overlay(Gtk.Window):
         if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS:
             # Held, not committed: the drag only starts once the pointer has
             # actually travelled, so a plain click stays available for jumping.
+            self._halt_walk()
             self.press_origin = (int(event.x_root), int(event.y_root))
             return True
+        return False
+
+    def _halt_walk(self, pause: float = 0.0) -> None:
+        """Stop mid-stride and stay put for at least `pause` seconds.
+
+        Needed before any interaction: while walking, every animation tick calls
+        move(), which fights the window manager's drag and yanks the pet back.
+        Worse, the pet walks out from under the pointer, so the drag threshold
+        is never crossed and it cannot be picked up at all.
+        """
+        if self.walking:
+            self.walking = 0
+            self.visual_state = "idle"
+            self.frame_index = 0
+        self.next_walk_at = max(
+            self.next_walk_at, time.monotonic() + max(pause, WALK_PAUSE_RANGE[0])
+        )
+
+    def _on_enter(self, _widget, _event) -> bool:
+        # Hovering is how you reach for the pet, so it should hold still.
+        self.hovered = True
+        self._halt_walk()
+        return False
+
+    def _on_leave(self, _widget, _event) -> bool:
+        self.hovered = False
         return False
 
     def _on_motion(self, _widget, event) -> bool:
@@ -577,6 +611,7 @@ class Overlay(Gtk.Window):
             self._on_click()
         elif self.dragging:
             self.dragging = False
+            self._halt_walk()  # settle where it was dropped before wandering on
             config.update(position=self.settings.get("position"))
         return False
 

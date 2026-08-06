@@ -58,7 +58,13 @@ That is the whole install. `setup`:
 
 - symlinks `claude-pet` into `~/.local/bin`, and adds that to `PATH` in your
   shell rc if it is not there already, so `claude-pet` works from any directory
-- installs tab completion for bash (and zsh, via `bashcompinit`)
+- installs tab completion for bash and zsh, both via the standard completion
+  directory and a line in your shell rc, so it works with or without the
+  `bash-completion` package
+- offers to install `wmctrl`, which is what lets a click raise a terminal that
+  is not running tmux (the only step that needs `sudo`; skip it with
+  `--no-deps`, and it is skipped automatically when there is no terminal to
+  prompt on)
 - downloads the default sprite pack, falling back to the bundled one offline
 - wires the hooks into `~/.claude/settings.json`
 - starts the pet
@@ -305,6 +311,7 @@ so this is how you get a picture of the window.
 |---|---|
 | click, while it needs you | **jump to that session** (see below) |
 | click, otherwise | pin / unpin the speech bubble |
+| hover | it stops wandering, so you can reach it |
 | drag | move the pet; the position is remembered |
 | right-click | switch pack; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
 
@@ -321,7 +328,7 @@ When the pet is showing **needs you**, **done** or **failed**, the bubble adds
 | Setup | What happens |
 |---|---|
 | Claude running inside **tmux** | switches to the exact pane — precise and reliable |
-| **X11 or XWayland** terminal, with `wmctrl` or `xdotool` installed | raises the terminal window |
+| **X11 or XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window (`setup` offers to install `wmctrl`) |
 | **Wayland-native** terminal (GNOME Terminal on Wayland, etc.) | not possible — the pet says so |
 
 That last row is a compositor limitation, not a missing feature. Under mutter
@@ -466,6 +473,9 @@ and failed. The default `active` also narrates tool calls.
 soon. `claude-pet status` shows the auto-exit setting and lists every session
 it still counts, marking any whose Claude process has died. If a session lingers
 there with a live pid, that Claude really is still running somewhere.
+
+**Tab completion does nothing.** Run `exec $SHELL`, or open a new terminal —
+the rc line only takes effect in a shell started after `setup`.
 
 **Clicking does not jump anywhere.** The bubble only offers `↩ click to jump`
 when a location was recorded. Sessions that started before `install-hooks` have
