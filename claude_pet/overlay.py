@@ -148,7 +148,8 @@ def resolve_labels(language: str) -> dict[str, str]:
 
 NOTIFY_ON = {"waiting", "review", "failed"}
 
-#: States where clicking the pet should take you to the session behind it.
+#: States whose bubble advertises the jump. Clicking tries it whenever a
+#: location is known, but only these are worth cluttering the bubble for.
 JUMPABLE = {"waiting", "review", "failed"}
 
 #: Pointer travel, in pixels, that turns a click into a drag.
@@ -678,8 +679,12 @@ class Overlay(Gtk.Window):
         return False
 
     def _on_click(self) -> None:
-        """Take me to whatever wants attention, or just toggle the bubble."""
-        if self.state not in JUMPABLE:
+        """Take me to the session, or toggle the bubble if there is none.
+
+        Any state, not just the alerting ones: "show me that terminal" is what
+        people reach for the pet to do, whether or not Claude is asking.
+        """
+        if not self.locator:
             self.bubble_pinned = not self.bubble_pinned
             self._apply_input_shape()
             self.queue_draw()

@@ -4,6 +4,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 export PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# `python3 -m` puts the working directory first on sys.path, so running this
+# launcher from inside *another* claude-pet checkout would import that copy
+# instead of this one. Ignored before Python 3.11, which is harmless.
+export PYTHONSAFEPATH=1
+
 # GTK must pick its backend before Python starts. Only X11/XWayland honours
 # _NET_WM_STATE_ABOVE under mutter, which is what keeps the pet on top.
 export GDK_BACKEND="${CLAUDE_PET_GDK_BACKEND:-x11}"
