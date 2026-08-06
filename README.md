@@ -83,6 +83,9 @@ Either way, `setup`:
   is not running tmux (the only step that needs `sudo`; skip it with
   `--no-deps`, and it is skipped automatically when there is no terminal to
   prompt on)
+- makes your terminal reachable for those clicks if it is a Wayland-native one
+  that cannot be raised — see [jumping back to a session](#jumping-back-to-a-session);
+  `--no-deps` skips this too, and `claude-pet fix-terminal --undo` reverts it
 - downloads the default sprite pack, falling back to the bundled one offline
 - wires the hooks into `~/.claude/settings.json`
 - starts the pet
@@ -277,6 +280,9 @@ claude-pet doctor --fix               # same as setup
 claude-pet install-hooks              # ~/.claude/settings.json (global)
 claude-pet install-hooks --project    # ./.claude/settings.json (this repo only)
 claude-pet uninstall-hooks
+
+claude-pet fix-terminal               # run the terminal under XWayland
+claude-pet fix-terminal --undo        # put it back
 ```
 
 `install-hooks` **merges** into your existing settings: it never touches hooks
@@ -365,24 +371,40 @@ uses — but the terminal has to expose a method for it, and not all do.
 Terminator, for instance, only offers `unhide_cmdline`, which skips windows that
 are already visible, so it reports success while nothing moves.
 
-Two ways round it, both verified:
+`setup` handles this for you when it applies: it makes your terminal run under
+XWayland, which puts it back within `wmctrl`'s reach. You can also do it, or
+undo it, by hand:
 
 ```bash
-# 1. run Claude inside tmux — the pet then jumps to the exact pane
+claude-pet fix-terminal          # wrap the terminal
+claude-pet fix-terminal --undo   # put it back
+```
+
+It writes two things, both under your home directory and both removed by
+`--undo`:
+
+- `~/.local/bin/x-terminal-emulator`, a wrapper that execs the real terminal
+  with `GDK_BACKEND=x11`. This is what covers **Ctrl+Alt+T**, which runs
+  `x-terminal-emulator` off `PATH` and ignores desktop files entirely — and both
+  `gnome-shell` and `gsd-media-keys` carry `~/.local/bin` at the front of their
+  `PATH`, so the wrapper wins.
+- a copy of the terminal's `.desktop` file with `GDK_BACKEND=x11` prefixed onto
+  its `Exec` lines, which covers the launcher and the dock.
+
+It is skipped when it would not help: on an X11 session, without `wmctrl`, or
+when the terminal already answers `org.freedesktop.Application` and can raise
+itself — forcing that one onto XWayland would cost it crisp scaling for nothing.
+
+The alternative, which changes nothing about your terminal, is to run Claude
+inside tmux — the pet then jumps to the exact pane:
+
+```bash
 tmux new -s work
 claude
-
-# 2. or run your terminal under XWayland, which puts it back in wmctrl's reach
-GDK_BACKEND=x11 terminator
 ```
 
-To make the second permanent, copy the terminal's desktop file and prefix the
-`Exec` line — for Terminator:
-
-```bash
-cp /usr/share/applications/terminator.desktop ~/.local/share/applications/
-sed -i 's|^Exec=|Exec=env GDK_BACKEND=x11 |' ~/.local/share/applications/terminator.desktop
-```
+XWayland caveat: on a HiDPI screen an XWayland window can look slightly softer
+than a native one. If that bothers you, `--undo` and use tmux instead.
 
 ## Sprite packs
 
@@ -473,6 +495,7 @@ about **33 ms** per tool call.
 | `claude_pet/launch.py` | starting the overlay detached, shared by hook and CLI |
 | `claude_pet/locate.py` | recording where a session runs (hook side) |
 | `claude_pet/jump.py` | jumping back to it (overlay side) |
+| `claude_pet/terminal.py` | making a Wayland terminal reachable for that jump |
 | `claude_pet/registry.py` | codex-pets.net API client and installer |
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |

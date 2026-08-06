@@ -408,6 +408,31 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
 # ------------------------------------------------------------------- doctor
 
 
+def cmd_fix_terminal(args: argparse.Namespace) -> int:
+    from . import terminal
+
+    if args.undo:
+        if terminal.uninstall():
+            print("reverted; close and reopen your terminal")
+        else:
+            print("nothing to revert")
+        return 0
+
+    if not terminal.needed():
+        session = os.environ.get("XDG_SESSION_TYPE", "?")
+        if session != "wayland":
+            print(f"not needed: this is a {session} session, the terminal is already reachable")
+        elif not terminal.default_terminal():
+            print("not needed: no x-terminal-emulator on PATH")
+        else:
+            print("not needed: install wmctrl first (`claude-pet setup`)")
+        return 0
+
+    print("wrapping your terminal so it runs under XWayland...")
+    terminal.install()
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     from . import sprites
 
@@ -523,8 +548,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         hint = "install wmctrl (or xdotool) to raise the terminal, or run Claude in tmux"
     optional("click-to-jump", bool(usable), hint)
-    if usable and not methods["x11"] and session_type != "wayland":
-        print("  INFO  install wmctrl to also raise non-tmux terminals")
+
+    from . import terminal
+
+    if terminal.needed():
+        todo(
+            "terminal reachable for clicks",
+            terminal.wrapper_installed(),
+            "claude-pet fix-terminal",
+            "" if terminal.wrapper_installed() else "a Wayland terminal cannot be raised as-is",
+        )
 
     print()
     if problems:
@@ -770,7 +803,13 @@ def _finish_setup(install_deps: bool = True) -> int:
     linked = launcher_on_path()
     completed = completion_installed()
 
-    if has_pack and has_hooks and running and linked and completed and jump_helper_present():
+    from . import terminal
+
+    terminal_ready = not terminal.needed() or terminal.wrapper_installed()
+    if (
+        has_pack and has_hooks and running and linked and completed
+        and jump_helper_present() and terminal_ready
+    ):
         print("Nothing to do: pack installed, hooks in place, on PATH, pet running.")
         return 0
 
@@ -785,6 +824,10 @@ def _finish_setup(install_deps: bool = True) -> int:
     if install_deps and not jump_helper_present():
         print("enabling click-to-jump outside tmux...")
         _install_jump_helper()
+
+    if install_deps and not terminal_ready:
+        print("making your terminal reachable so clicking the pet can raise it...")
+        terminal.install()
 
     if not has_pack:
         print(f"installing pack {DEFAULT_PACK}...")
@@ -907,6 +950,12 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = subparsers.add_parser("uninstall-hooks", help="remove the hooks again")
     uninstall.add_argument("--project", action="store_true")
     uninstall.set_defaults(func=cmd_uninstall_hooks)
+
+    fix_terminal = subparsers.add_parser(
+        "fix-terminal", help="run your terminal under XWayland so clicks can raise it"
+    )
+    fix_terminal.add_argument("--undo", action="store_true", help="remove the wrappers again")
+    fix_terminal.set_defaults(func=cmd_fix_terminal)
 
     hook = subparsers.add_parser("hook", help="(internal) handle a hook event")
     hook.add_argument("event", nargs="?")
