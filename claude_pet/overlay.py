@@ -155,9 +155,9 @@ JUMPABLE = {"waiting", "review", "failed"}
 #: Pointer travel, in pixels, that turns a click into a drag.
 DRAG_THRESHOLD = 5
 
-#: Focus changes within this long of opening the menu are setup noise, not a
+#: Grab changes within this long of opening the menu are setup noise, not a
 #: click on something else.
-MENU_FOCUS_GUARD_SECONDS = 0.3
+MENU_GRAB_GUARD_SECONDS = 0.3
 
 
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
@@ -748,27 +748,24 @@ class Overlay(Gtk.Window):
         menu.show_all()
         menu.popup_at_pointer(event)
 
-        # Closing on an outside click, not on the pointer merely wandering off.
-        # The menu takes keyboard focus -- measured -- so clicking any other
-        # window, Wayland-native included, shows up here as focus-out. Watching
-        # the grab instead would miss it: an XWayland grab never sees a click
-        # that lands on a Wayland surface.
+        # Closing on an outside click, in two halves. A click on an X11 window
+        # arrives as a button press outside the menu's grab, which GTK already
+        # handles. A click on a Wayland surface never reaches an XWayland grab
+        # at all -- mutter takes the grab away instead, which lands here.
+        #
+        # Focus is no help: measured that the menu keeps has-toplevel-focus even
+        # while another window is presented, because it holds a keyboard grab.
         self.menu_opened_at = time.monotonic()
-        toplevel = menu.get_toplevel()
-        if isinstance(toplevel, Gtk.Window):
-            toplevel.connect("notify::has-toplevel-focus", self._on_menu_focus_change, menu)
         menu.connect("grab-broken-event", self._on_menu_grab_broken, menu)
 
-    def _on_menu_focus_change(self, toplevel, _param, menu) -> None:
-        if toplevel.has_toplevel_focus():
-            return
-        # Focus can flicker while the menu is still being mapped; that is not a
-        # click on anything.
-        if time.monotonic() - self.menu_opened_at < MENU_FOCUS_GUARD_SECONDS:
-            return
-        menu.popdown()
-
-    def _on_menu_grab_broken(self, _menu, _event, menu) -> bool:
+    def _on_menu_grab_broken(self, _menu, event, menu) -> bool:
+        # Popping the menu replaces the implicit grab taken by the right-click
+        # that opened it. Treating that as somebody else taking over shut the
+        # menu the instant it appeared.
+        if getattr(event, "implicit", False):
+            return False
+        if time.monotonic() - self.menu_opened_at < MENU_GRAB_GUARD_SECONDS:
+            return False
         menu.popdown()
         return False
 

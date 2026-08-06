@@ -447,11 +447,10 @@ Frame counts per row are **measured from the alpha channel** rather than read
 from the published table — real packs sometimes draw a frame past the nominal
 count, and trailing cells are required to be fully transparent anyway.
 
-### Hatching one from a picture
+### Animating a picture into a pack
 
-Codex has `/hatch-pet`, which generates a pack with an image model. This is the
-offline equivalent — point it at any image and it derives the nine rows by
-transforming it:
+This draws no art. Point it at an image you already have and it derives the nine
+rows by transforming that one picture:
 
 ```bash
 claude-pet hatch ~/Pictures/my-cat.png
@@ -462,8 +461,16 @@ claude-pet use my-cat && claude-pet restart
 A flat background is made transparent automatically. It bobs for idle, leans and
 shifts for the running rows, arcs with a squash for jumping, desaturates and
 sheds a tear for failure, and draws the `?` and tick that distinguish waiting
-from review. It will not beat art drawn frame by frame, but it is a real pack:
-nine populated rows at the right cell size, loadable by anything that reads the
+from review — all sine-driven transforms of the source image, no drawing model
+involved.
+
+That is half of what Codex's `/hatch-pet` does. Codex generates the sprite art
+itself with an image model; this only does the packaging. If you want generated
+art, generate the image however you like — Codex, any image model, or a friend
+who draws — and then point `hatch` at it.
+
+The result will not beat art drawn frame by frame, but it is a real pack: nine
+populated rows at the right cell size, loadable by anything that reads the
 format.
 
 ### Rolling your own

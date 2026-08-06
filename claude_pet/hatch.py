@@ -1,14 +1,14 @@
-"""Turn one image into a complete pet pack.
+"""Animate one image into a complete pet pack.
 
-Codex has `/hatch-pet`, which generates a pack with an image model. This is the
-offline equivalent: it takes a picture you already have and derives the nine
-animation rows the pet contract needs by transforming it -- bobbing, leaning,
-squashing, a jump arc, a droop for failure -- and drawing the small marks that
-distinguish waiting and review.
+This draws no art. It takes a picture you already have and derives the nine
+animation rows the pet contract needs by transforming that one image: sine-driven
+bob and lean, a squash-and-stretch jump arc, desaturation for failure, plus a
+handful of marks drawn on top (`?`, a tick, a tear, sparkles).
 
-The result will not beat art drawn frame by frame, but it is a real pack: nine
-populated rows at the right cell size, loadable by anything that reads the
-format.
+So it is half of what Codex's `/hatch-pet` does. That generates the sprite art
+itself with an image model; this only handles the packaging -- turning a subject
+into nine rows at the right cell size. If you want generated art, generate the
+image however you like and then point this at it.
 """
 
 from __future__ import annotations

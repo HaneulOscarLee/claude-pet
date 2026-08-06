@@ -905,7 +905,9 @@ def build_parser() -> argparse.ArgumentParser:
     collection.add_argument("--codex-home", action="store_true")
     collection.set_defaults(func=cmd_add_collection)
 
-    hatch_parser = subparsers.add_parser("hatch", help="build a pack from one image")
+    hatch_parser = subparsers.add_parser(
+        "hatch", help="animate one image you supply into a pack (draws no art)"
+    )
     hatch_parser.add_argument("image", help="png, jpg or webp; a flat background is dropped")
     hatch_parser.add_argument("--id", help="pet id (default: the filename)")
     hatch_parser.add_argument("--name", help="display name")
