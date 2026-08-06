@@ -226,6 +226,8 @@ claude-pet add clawd tennis-ball dario  # or several
 claude-pet add-collection cats          # a whole curated collection
 claude-pet add guga --codex-home        # install into ~/.codex/pets instead
 
+claude-pet hatch ~/Pictures/cat.png     # build a pack from any image
+
 claude-pet list                          # what is installed
 claude-pet use tennis-ball               # pick the active pack
 claude-pet preview tennis-ball           # dump all animation rows to a PNG
@@ -445,6 +447,25 @@ Frame counts per row are **measured from the alpha channel** rather than read
 from the published table — real packs sometimes draw a frame past the nominal
 count, and trailing cells are required to be fully transparent anyway.
 
+### Hatching one from a picture
+
+Codex has `/hatch-pet`, which generates a pack with an image model. This is the
+offline equivalent — point it at any image and it derives the nine rows by
+transforming it:
+
+```bash
+claude-pet hatch ~/Pictures/my-cat.png
+claude-pet demo --pet my-cat          # watch every row
+claude-pet use my-cat && claude-pet restart
+```
+
+A flat background is made transparent automatically. It bobs for idle, leans and
+shifts for the running rows, arcs with a squash for jumping, desaturates and
+sheds a tear for failure, and draws the `?` and tick that distinguish waiting
+from review. It will not beat art drawn frame by frame, but it is a real pack:
+nine populated rows at the right cell size, loadable by anything that reads the
+format.
+
 ### Rolling your own
 
 A pack is just a directory:
@@ -493,6 +514,7 @@ about **33 ms** per tool call.
 | File | Role |
 |---|---|
 | `claude_pet/sprites.py` | atlas parsing, v1/v2 detection, frame slicing |
+| `claude_pet/hatch.py` | deriving a whole pack from a single image |
 | `claude_pet/state.py` | shared state file, multi-session aggregation |
 | `claude_pet/hook.py` | hook event → pet state, overlay autostart |
 | `claude_pet/overlay.py` | GTK3 window, animation, bubble, walking, mouse-look |

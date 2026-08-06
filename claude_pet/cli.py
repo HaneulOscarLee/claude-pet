@@ -143,6 +143,25 @@ def cmd_add_collection(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hatch(args: argparse.Namespace) -> int:
+    from . import hatch, sprites
+
+    pet_id = args.id or Path(args.image).stem.lower().replace("_", "-").replace(" ", "-")
+    pet_id = "".join(char for char in pet_id if char.isalnum() or char == "-").strip("-")
+    if not pet_id:
+        print("claude-pet: could not make an id from that filename; pass --id", file=sys.stderr)
+        return 1
+
+    directory = hatch.hatch(args.image, pet_id, args.name, _install_root(args))
+    pet = sprites.load_pet(directory)
+    print(f"hatched  {pet.id}  ({pet.display_name}, v{pet.version}) -> {directory}")
+    for name, count in pet.frame_counts.items():
+        print(f"  {name:<16} {count} frames")
+    print(f"\nTry it:  claude-pet demo --pet {pet.id}")
+    print(f"Keep it: claude-pet use {pet.id} && claude-pet restart")
+    return 0
+
+
 def cmd_use(args: argparse.Namespace) -> int:
     available = config.discover()
     if args.pet_id not in available:
@@ -885,6 +904,13 @@ def build_parser() -> argparse.ArgumentParser:
     collection.add_argument("slug")
     collection.add_argument("--codex-home", action="store_true")
     collection.set_defaults(func=cmd_add_collection)
+
+    hatch_parser = subparsers.add_parser("hatch", help="build a pack from one image")
+    hatch_parser.add_argument("image", help="png, jpg or webp; a flat background is dropped")
+    hatch_parser.add_argument("--id", help="pet id (default: the filename)")
+    hatch_parser.add_argument("--name", help="display name")
+    hatch_parser.add_argument("--codex-home", action="store_true")
+    hatch_parser.set_defaults(func=cmd_hatch)
 
     use = subparsers.add_parser("use", help="choose the active pack")
     use.add_argument("pet_id")

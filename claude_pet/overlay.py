@@ -677,6 +677,9 @@ class Overlay(Gtk.Window):
         Any state, not just the alerting ones: "show me that terminal" is what
         people reach for the pet to do, whether or not Claude is asking.
         """
+        # React either way, so the pet feels alive rather than inert.
+        self._react("waving")
+
         if not self.locator:
             self.bubble_pinned = not self.bubble_pinned
             self._apply_input_shape()
@@ -685,6 +688,15 @@ class Overlay(Gtk.Window):
 
         result = jump.to_session(self.locator)
         self._flash(result.message)
+
+    def _react(self, name: str) -> None:
+        """Play `name` once, then go back to whatever the state was showing."""
+        if not self.view.animations.get(name):
+            return
+        self.visual_return = self.state
+        self.visual_state = name
+        self.frame_index = 0
+        self.visual_until = time.monotonic() + self._row_duration(name)
 
     def _flash(self, message: str, seconds: float = 4.0) -> None:
         self.flash_text = message
