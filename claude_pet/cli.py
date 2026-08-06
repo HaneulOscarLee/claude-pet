@@ -191,6 +191,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     return overlay.run(args.pet)
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    from . import overlay
+
+    return overlay.demo(pet_id=args.pet, seconds=args.seconds)
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     from . import overlay
 
@@ -465,6 +471,11 @@ def build_parser() -> argparse.ArgumentParser:
     restart = subparsers.add_parser("restart", help="restart the overlay")
     restart.add_argument("--pet")
     restart.set_defaults(func=cmd_restart)
+
+    demo = subparsers.add_parser("demo", help="cycle the window through every animation row")
+    demo.add_argument("--pet")
+    demo.add_argument("--seconds", type=float, default=2.0, help="seconds per row")
+    demo.set_defaults(func=cmd_demo)
 
     snapshot = subparsers.add_parser("snapshot", help="capture the overlay window to a PNG (debug)")
     snapshot.add_argument("output")

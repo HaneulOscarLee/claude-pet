@@ -41,11 +41,29 @@ EDGE_MARGIN = 12
 #: rows 9-10; row 10 holds the left half of the sweep and row 9 the right half.
 LOOK_ORDER: tuple[int, ...] = (8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7)
 
-#: States that play once and then settle back to idle.
-ONE_SHOT = {"waving", "jumping"}
+#: Animation row played once when a state is entered, before settling into the
+#: state's own row. Finishing a turn earns a hop.
+INTRO = {"review": "jumping"}
+
+#: Seconds a state holds before the pet falls back to idle. States absent here
+#: hold until Claude reports something else -- `waiting` must never time out,
+#: because the whole point is that it keeps asking for you. Without this,
+#: `review` would stick until the next prompt and the pet would never idle,
+#: so the idle and walking rows would go unseen in normal use.
+DECAY_SECONDS: dict[str, float] = {"review": 20.0, "failed": 20.0}
 
 #: Frames per second per state -- working should read as busier than idle.
-STATE_FPS = {"idle": 6, "waiting": 8, "review": 8, "running": 12, "failed": 8, "waving": 10}
+STATE_FPS = {
+    "idle": 6,
+    "waiting": 8,
+    "review": 8,
+    "running": 12,
+    "failed": 8,
+    "waving": 10,
+    "jumping": 12,
+    "running-right": 12,
+    "running-left": 12,
+}
 
 #: Bubble state labels. `language: auto` picks by locale and falls back to en.
 LABELS: dict[str, dict[str, str]] = {
@@ -131,11 +149,16 @@ class Overlay(Gtk.Window):
         self.labels = resolve_labels(str(settings.get("language") or "auto"))
 
         self.state = "idle"
+        # What the state file last reported, kept apart from `state` so a local
+        # decay to idle is not immediately undone by the next poll.
+        self.source_state = "idle"
         self.detail = ""
         self.sessions = 0
         self.visual_state = "idle"
         self.frame_index = 0
-        self.pending_return: float | None = None
+        self.decay_at: float | None = None
+        self.visual_until: float | None = None
+        self.visual_return: str | None = None
         self.bubble_until = 0.0
         self.bubble_pinned = False
         self.last_mtime = -1.0
@@ -264,28 +287,53 @@ class Overlay(Gtk.Window):
         self.detail = snapshot.get("detail") or ""
         self.sessions = int(snapshot.get("sessions") or 0)
 
-        if new_state == self.state:
+        if new_state == self.source_state:
             return
-        previous, self.state = self.state, new_state
-
-        self.visual_state = new_state
+        previous = self.state
+        self.source_state = new_state
+        self.state = new_state
         self.frame_index = 0
         self.walking = 0
-        self.pending_return = (
-            time.monotonic() + self._one_shot_duration(new_state) if new_state in ONE_SHOT else None
-        )
+
+        now = time.monotonic()
+        intro = INTRO.get(new_state)
+        if intro and self.view.animations.get(intro):
+            self.visual_state = intro
+            self.visual_return = new_state
+            self.visual_until = now + self._row_duration(intro)
+        else:
+            self.visual_state = new_state
+            self.visual_return = None
+            self.visual_until = None
+
+        hold = DECAY_SECONDS.get(new_state)
+        if new_state == "waving":
+            # No dwell of its own: the wave plays, then the pet is just idle.
+            hold = self._row_duration("waving")
+        self.decay_at = now + hold if hold is not None else None
 
         if new_state in NOTIFY_ON:
-            self.bubble_until = time.monotonic() + (3600 if new_state == "waiting" else 12)
-            if self.settings.get("notifications", True) and previous != new_state:
+            self.bubble_until = now + (3600 if new_state == "waiting" else 12)
+            if self.settings.get("notifications", False) and previous != new_state:
                 self._notify(new_state)
         else:
             self.bubble_until = 0.0
         self._apply_input_shape()
 
-    def _one_shot_duration(self, name: str) -> float:
+    def _row_duration(self, name: str) -> float:
         frames = self.view.frames(name)
         return len(frames) / max(1, STATE_FPS.get(name, 10))
+
+    def _settle_to_idle(self) -> None:
+        """Fall back to idle without forgetting what the state file said."""
+        self.decay_at = None
+        self.state = "idle"
+        self.visual_state = "idle"
+        self.visual_until = None
+        self.visual_return = None
+        self.frame_index = 0
+        self.bubble_until = 0.0
+        self._apply_input_shape()
 
     def _notify(self, name: str) -> None:
         summary = f"Claude Code · {self.labels.get(name, name)}"
@@ -316,12 +364,16 @@ class Overlay(Gtk.Window):
     def _tick(self) -> bool:
         now = time.monotonic()
 
-        if self.pending_return is not None and now >= self.pending_return:
-            self.pending_return = None
-            self.visual_state = "idle"
+        if self.visual_until is not None and now >= self.visual_until:
+            self.visual_state = self.visual_return or "idle"
+            self.visual_until = None
+            self.visual_return = None
             self.frame_index = 0
 
-        if self.state == "idle" and self.pending_return is None:
+        if self.decay_at is not None and now >= self.decay_at:
+            self._settle_to_idle()
+
+        if self.state == "idle" and self.visual_until is None:
             self._update_walk(now)
         elif self.walking:
             self.walking = 0
@@ -546,6 +598,60 @@ class Overlay(Gtk.Window):
             except OSError:
                 pass
         Gtk.main_quit()
+
+
+def demo(pet_id: str | None = None, seconds: float = 2.0) -> int:
+    """Cycle the live window through every animation row the pack provides.
+
+    The desktop equivalent of the state buttons on a pack's gallery page: it is
+    how you check that a pack drew all nine rows before trusting it.
+    """
+    if not os.environ.get("DISPLAY"):
+        print("claude-pet: no DISPLAY", file=sys.stderr)
+        return 2
+
+    settings = dict(config.load())
+    settings.update({"walk": False, "notifications": False, "look_at_mouse": False})
+    if pet_id:
+        settings["pet"] = pet_id
+
+    directory = config.active_pet_dir(settings)
+    if directory is None:
+        print("claude-pet: no pet packs found", file=sys.stderr)
+        return 2
+
+    pet = sprites.load_pet(directory)
+    view = PetView(pet, int(settings.get("height") or 132))
+    window = Overlay(view, settings, poll=False)
+    window.bubble_pinned = True
+
+    rows = [name for name in sprites.ROW_STATES if view.animations.get(name)]
+    print(
+        f"claude-pet: {pet.id} v{pet.version} cycling {len(rows)} rows, Ctrl+C to stop",
+        flush=True,
+    )
+    counter = {"index": 0}
+
+    def advance() -> bool:
+        name = rows[counter["index"] % len(rows)]
+        counter["index"] += 1
+        window.state = name
+        window.visual_state = name
+        window.detail = f"{len(view.animations[name])} frames"
+        window.frame_index = 0
+        window.decay_at = None
+        window.visual_until = None
+        window.visual_return = None
+        window._apply_input_shape()
+        print(f"  {name:<15} {len(view.animations[name])} frames", flush=True)
+        return True
+
+    advance()
+    GLib.timeout_add(max(200, int(seconds * 1000)), advance)
+    for number in (signal.SIGINT, signal.SIGTERM):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, number, lambda: (Gtk.main_quit(), True)[1])
+    Gtk.main()
+    return 0
 
 
 def snapshot(

@@ -89,6 +89,21 @@ that with `claude-pet set autostart false`.
 | `SubagentStop` | `running` | working · subagent finished |
 | `SessionEnd` | — | the session is forgotten |
 
+All nine animation rows get used, because states have a lifecycle rather than
+just switching:
+
+```
+SessionStart ──> waving ──────────────────> idle ──> wanders (running-left/right)
+UserPromptSubmit ──> running
+Stop ──> jumping (once) ──> review ──20s──> idle ──> wanders
+tool error ──> failed ──────────────20s──> idle
+Notification ──> waiting  (holds until Claude moves on — never times out)
+```
+
+Finishing a turn earns a hop, then the pet shows `done` for 20 seconds, then
+settles and starts wandering. Without that decay `review` would stick until
+your next prompt, and the idle and walking rows would never be seen.
+
 Several Claude sessions at once collapse into the most urgent state:
 
 ```
@@ -97,7 +112,18 @@ waiting  >  failed  >  review  >  running  >  waving  >  idle
 
 So a pet reading **needs you** means *some* session wants your attention, the
 bubble names which message, and the bubble shows `(N sessions)` when more than
-one is live.
+one is live. One pet covers every session — it does not matter how many
+terminals or projects you have open:
+
+| Live sessions | Pet shows |
+|---|---|
+| A `running`, B `review`, C `waiting` | **needs you** · *C's message* · `(3 sessions)` |
+| A `running`, B `review` | **done** `(2 sessions)` |
+| A `running` | **working** |
+| none | **idle**, and it starts wandering |
+
+Sessions are tracked by Claude's own session id and dropped on `SessionEnd`, or
+after six hours of silence if a session dies without one.
 
 Bubble labels ship in English and Korean: `claude-pet set language ko`
 (`auto`, the default, follows your locale).
@@ -128,6 +154,16 @@ claude-pet add guga --codex-home        # install into ~/.codex/pets instead
 claude-pet list                          # what is installed
 claude-pet use tennis-ball               # pick the active pack
 claude-pet preview tennis-ball           # dump all animation rows to a PNG
+claude-pet demo                          # watch every row in the live window
+```
+
+Found a pack you like on the gallery? The pet id is the last path segment of
+its URL, so `https://codex-pets.net/#/pets/doro-v2-roshan` becomes:
+
+```bash
+claude-pet add doro-v2-roshan
+claude-pet use doro-v2-roshan
+claude-pet restart
 ```
 
 ```console
@@ -198,6 +234,8 @@ Stored in `~/.config/claude-pet/config.json`.
 ### Debugging
 
 ```bash
+claude-pet demo                                      # cycle every animation row
+claude-pet demo --pet doro-v2-roshan --seconds 1     # check a specific pack, faster
 claude-pet snapshot out.png                          # capture the live overlay
 claude-pet snapshot out.png --state waiting \
     --detail "needs permission"                      # capture a forced state
@@ -278,10 +316,12 @@ Drop it in `~/.claude/pets/my-pet/` and check it loaded:
 ```bash
 claude-pet list
 claude-pet preview my-pet -o check.png    # eyeball every row and frame count
+claude-pet demo --pet my-pet              # or watch them animate, row by row
 ```
 
 `preview` prints the frame count it detected per row, which is the fastest way
-to catch a misaligned grid.
+to catch a misaligned grid. `demo` is the desktop equivalent of the state
+buttons on a gallery page — it steps the real window through every row.
 
 ## How it works
 

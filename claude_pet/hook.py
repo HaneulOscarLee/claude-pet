@@ -80,9 +80,20 @@ def _spawn_overlay() -> None:
     environment = {**os.environ, "CLAUDE_PET_AUTOSTARTED": "1"}
     existing = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = f"{root}:{existing}" if existing else str(root)
+
+    # Go through the launcher, which is the one place that pins
+    # GDK_BACKEND=x11. Calling python directly would start the overlay on the
+    # Wayland backend, where mutter ignores always-on-top.
+    launcher = root / "claude-pet"
+    if os.access(launcher, os.X_OK):
+        argv = [str(launcher), "run"]
+    else:
+        argv = [sys.executable, "-m", "claude_pet", "run"]
+        environment.setdefault("GDK_BACKEND", "x11")
+
     try:
         subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-            [sys.executable, "-m", "claude_pet", "run"],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=handle,
             stderr=handle,
