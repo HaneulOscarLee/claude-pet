@@ -349,16 +349,40 @@ When the pet is showing **needs you**, **done** or **failed**, the bubble adds
 | Setup | What happens |
 |---|---|
 | Claude running inside **tmux** | switches to the exact pane — precise and reliable |
-| **X11 or XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window (`setup` offers to install `wmctrl`) |
-| **Wayland-native** terminal (GNOME Terminal on Wayland, etc.) | not possible — the pet says so |
-
-That last row is a compositor limitation, not a missing feature. Under mutter
-a client cannot raise another application's window: `org.gnome.Shell.FocusApp`,
-`.Introspect` and `.Eval` all answer `AccessDenied`, and xdg-activation needs a
-token only the target application can hand out. Running Claude inside tmux is
-the reliable answer, and gives pane-level precision as a bonus.
+| **X11 or XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window (`setup` installs `wmctrl`) |
+| **Wayland-native** terminal that implements `org.freedesktop.Application` | asks the terminal to present itself |
+| any other **Wayland-native** terminal | not possible — the pet says so rather than pretending |
 
 `claude-pet doctor` reports which methods are available on your machine.
+
+#### Why the last row cannot be fixed
+
+Under mutter a client may not raise *another* application's window.
+`org.gnome.Shell.FocusApp`, `.Introspect` and `.Eval` all answer `AccessDenied`,
+and xdg-activation needs a token only the target application can hand out. An
+application raising *itself* is always allowed, which is what the D-Bus route
+uses — but the terminal has to expose a method for it, and not all do.
+Terminator, for instance, only offers `unhide_cmdline`, which skips windows that
+are already visible, so it reports success while nothing moves.
+
+Two ways round it, both verified:
+
+```bash
+# 1. run Claude inside tmux — the pet then jumps to the exact pane
+tmux new -s work
+claude
+
+# 2. or run your terminal under XWayland, which puts it back in wmctrl's reach
+GDK_BACKEND=x11 terminator
+```
+
+To make the second permanent, copy the terminal's desktop file and prefix the
+`Exec` line — for Terminator:
+
+```bash
+cp /usr/share/applications/terminator.desktop ~/.local/share/applications/
+sed -i 's|^Exec=|Exec=env GDK_BACKEND=x11 |' ~/.local/share/applications/terminator.desktop
+```
 
 ## Sprite packs
 

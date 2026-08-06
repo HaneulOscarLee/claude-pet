@@ -155,6 +155,9 @@ JUMPABLE = {"waiting", "review", "failed"}
 #: Pointer travel, in pixels, that turns a click into a drag.
 DRAG_THRESHOLD = 5
 
+#: How long the right-click menu survives the pointer leaving it.
+MENU_CLOSE_DELAY_MS = 1200
+
 
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
     data = GLib.Bytes.new(image.tobytes())
@@ -218,6 +221,7 @@ class Overlay(Gtk.Window):
         self.flash_text = ""
         self.flash_until = 0.0
         self.press_origin: tuple[int, int] | None = None
+        self.menu_close_timer: int | None = None
 
         self.dragging = False
         self.hovered = False
@@ -741,16 +745,38 @@ class Overlay(Gtk.Window):
         menu.append(quit_item)
 
         menu.show_all()
-        # The pet window refuses focus so it never steals your keyboard. That
-        # also stops the menu taking a grab, which left it open when you clicked
-        # elsewhere -- so lend the window focus for as long as the menu is up.
-        self.set_accept_focus(True)
+        # The menu does take a pointer grab -- measured -- but an XWayland grab
+        # cannot see clicks that land on Wayland windows, so clicking a browser
+        # never dismisses it. Close it once the pointer has been away a moment.
+        menu.connect("enter-notify-event", self._on_menu_enter)
+        menu.connect("leave-notify-event", self._on_menu_leave)
         menu.connect("deactivate", self._on_menu_closed)
-        menu.connect("hide", self._on_menu_closed)
         menu.popup_at_pointer(event)
 
+    def _cancel_menu_timer(self) -> None:
+        if self.menu_close_timer is not None:
+            GLib.source_remove(self.menu_close_timer)
+            self.menu_close_timer = None
+
+    def _on_menu_enter(self, _menu, _event) -> bool:
+        self._cancel_menu_timer()
+        return False
+
+    def _on_menu_leave(self, menu, event) -> bool:
+        # Moving onto a menu item counts as leaving the menu itself; ignore it.
+        if event.detail == Gdk.NotifyType.INFERIOR:
+            return False
+        self._cancel_menu_timer()
+        self.menu_close_timer = GLib.timeout_add(MENU_CLOSE_DELAY_MS, self._close_menu, menu)
+        return False
+
+    def _close_menu(self, menu) -> bool:
+        self.menu_close_timer = None
+        menu.popdown()
+        return False
+
     def _on_menu_closed(self, _menu) -> None:
-        self.set_accept_focus(False)
+        self._cancel_menu_timer()
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():

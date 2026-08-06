@@ -8,16 +8,21 @@ reliability and reports honestly when none of it applies:
    pane rather than merely raising a window.
 2. **X11 / XWayland terminals** -- activate the window owned by one of the
    session's ancestor processes, via `wmctrl` or `xdotool`.
-3. **D-Bus** -- ask the terminal to present *itself*. A client may not raise
-   someone else's window under mutter, but an application is always allowed to
-   raise its own, so this is the route that works for a Wayland-native
-   terminal. Terminator's `unhide_cmdline` and the standard
-   `org.freedesktop.Application.Activate` are both tried.
+3. **D-Bus** -- ask the terminal to present *itself*, via
+   `org.freedesktop.Application.Activate`. A client may not raise someone
+   else's window under mutter, but an application is always allowed to raise
+   its own, so this is the only route that can work for a Wayland-native
+   terminal -- and only for terminals that implement it (GApplication-based
+   ones do; Terminator does not).
 
 What is *not* possible is reaching over and raising an unco-operative Wayland
 window: `org.gnome.Shell.FocusApp`, `.Introspect` and `.Eval` all answer
 AccessDenied, and xdg-activation needs a token only the target app can hand out.
-When none of the three routes applies, the pet says so instead of pretending.
+Running such a terminal under XWayland puts it back within reach of route 2.
+
+Every route must only report success when the window actually moves. Returning
+success for a call that did nothing is worse than admitting defeat, because the
+pet then says it raised a terminal that is still buried.
 """
 
 from __future__ import annotations
@@ -150,15 +155,17 @@ def _dbus_jump(locator: dict[str, Any]) -> JumpResult | None:
         if owner not in pids:
             continue
 
-        # Terminator's own interface. Its "unhide" is what its show-window
-        # hotkey calls, and the bus name doubles as the interface name.
-        if name.startswith("net.tenshu.Terminator"):
-            if _run([
-                "gdbus", "call", "--session", "--dest", name,
-                "--object-path", "/net/tenshu/Terminator2",
-                "--method", f"{name}.unhide_cmdline", "{}",
-            ]):
-                return JumpResult(True, "raised the terminal")
+        # Terminator is deliberately not special-cased. Its only candidate
+        # method, unhide_cmdline, skips windows that are already visible:
+        #
+        #     for window in self.terminator.get_windows():
+        #         if not window.get_property('visible'):
+        #             window.on_hide_window()
+        #
+        # so it returns success and does nothing for a window that is merely
+        # behind another one -- which made the pet claim it had raised a
+        # terminal that never moved. Terminator under XWayland is handled by
+        # the wmctrl route above instead.
 
         # The standard route for anything GTK/GApplication-based.
         path = "/" + name.replace(".", "/").replace("-", "_")
@@ -192,4 +199,4 @@ def to_session(locator: dict[str, Any] | None) -> JumpResult:
 
     if locator.get("tmux_pane"):
         return JumpResult(False, "tmux is not installed")
-    return JumpResult(False, "cannot raise the terminal on this desktop")
+    return JumpResult(False, "no way to raise this terminal — see the README")
