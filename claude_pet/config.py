@@ -13,6 +13,7 @@ DEFAULTS: dict[str, Any] = {
     "anchor": "bottom-right",
     "fps": 10,
     "walk": True,         # wander along the screen edge while idle
+    "walk_speed": 3,      # pixels per animation step; 6 read as frantic
     # Off by default: the speech bubble is the intended channel, and a
     # desktop notification on top of it is just the same news twice.
     "notifications": False,
@@ -77,13 +78,19 @@ def claude_home() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
 
 
+def bundled_pets() -> Path:
+    """Packs shipped with the checkout, so a clone works without a download."""
+    return Path(__file__).resolve().parent.parent / "assets" / "pets"
+
+
 def pet_search_paths() -> list[Path]:
-    """Directories scanned for pet packs.
+    """Directories scanned for pet packs, highest priority first.
 
     `~/.codex/pets` is included so packs already installed with
-    `npx codex-pets add` are picked up without being copied.
+    `npx codex-pets add` are picked up without being copied. The bundled
+    directory comes last: anything the user installed should win over it.
     """
-    return [claude_home() / "pets", codex_home() / "pets"]
+    return [claude_home() / "pets", codex_home() / "pets", bundled_pets()]
 
 
 def discover() -> dict[str, Path]:

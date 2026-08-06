@@ -1,0 +1,7 @@
+{
+  "id": "pocket",
+  "displayName": "Pocket",
+  "description": "The bundled default pet. Drawn by tools/make_default_pack.py.",
+  "spritesheetPath": "spritesheet.webp",
+  "kind": "creature"
+}

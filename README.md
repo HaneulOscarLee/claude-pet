@@ -54,10 +54,22 @@ cd claude-pet
 ./claude-pet setup
 ```
 
-That is the whole install. `setup` installs a sprite pack, wires the hooks into
-`~/.claude/settings.json`, symlinks `claude-pet` into `~/.local/bin` so you can
-run it from anywhere, and starts the pet. It is idempotent — run it again and it
-tells you there is nothing to do. `claude-pet doctor --fix` is the same thing.
+That is the whole install. `setup`:
+
+- symlinks `claude-pet` into `~/.local/bin`, and adds that to `PATH` in your
+  shell rc if it is not there already, so `claude-pet` works from any directory
+- installs tab completion for bash (and zsh, via `bashcompinit`)
+- downloads the default sprite pack, falling back to the bundled one offline
+- wires the hooks into `~/.claude/settings.json`
+- starts the pet
+
+Run `exec $SHELL` afterwards so the PATH and completion changes take effect.
+It is idempotent — run it again and it tells you there is nothing to do.
+`claude-pet doctor --fix` is the same thing.
+
+A pet pack ships with the repo (`assets/pets/pocket`), so a clone has something
+to show without a download. Anything you install yourself takes priority over
+it.
 
 Then start a new Claude Code session. That is it — the pet follows along.
 
@@ -249,7 +261,8 @@ only its own entries.
 ```bash
 claude-pet set height 160             # sprite height in pixels
 claude-pet set anchor bottom-left     # bottom-right | bottom-left | top-right | top-left
-claude-pet set walk false             # stop wandering
+claude-pet set walk false             # stop wandering (also in the right-click menu)
+claude-pet set walk_speed 6           # or let it hurry
 claude-pet set language ko
 claude-pet set bubble alerts          # only speak up when it needs you
 claude-pet set position none          # forget a dragged position, re-anchor
@@ -261,6 +274,7 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `height` | `132` | on-screen sprite height in pixels |
 | `anchor` | `bottom-right` | corner to start in |
 | `walk` | `true` | wander along the screen edge while idle |
+| `walk_speed` | `3` | pixels per step while wandering; raise it for a sprint |
 | `language` | `auto` | bubble labels: `auto` \| `en` \| `ko` |
 | `bubble` | `active` | when to speak: `active` (any non-idle state) \| `alerts` (only needs-you / done / failed) \| `never` |
 | `notifications` | `false` | also send a desktop notification |
@@ -410,6 +424,8 @@ about **33 ms** per tool call.
 | `claude_pet/registry.py` | codex-pets.net API client and installer |
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |
+| `completions/claude-pet.bash` | tab completion, fed by `claude-pet _complete` |
+| `tools/make_default_pack.py` | draws the bundled pack in `assets/pets/pocket` |
 | `tests/test_aggregate.py` | multi-session aggregation and dwell behaviour |
 
 ```bash
@@ -470,6 +486,10 @@ rm -rf ~/.config/claude-pet ~/.local/state/claude-pet ~/.claude/pets
 ```
 
 ## Credits
+
+The bundled `pocket` pack is original, drawn by `tools/make_default_pack.py`
+and covered by this repository's licence. Every other pack is someone else's
+work, downloaded on request and never redistributed here.
 
 Sprite packs and the pack format come from the community gallery at
 [codex-pets.net](https://codex-pets.net/)

@@ -495,11 +495,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "claude-pet install-hooks",
         f"{len(installed_events)}/{len(HOOK_EVENTS)} events",
     )
+    on_path = launcher_on_path()
     todo(
         "claude-pet on PATH",
-        launcher_on_path(),
+        on_path,
         "claude-pet doctor --fix",
-        "" if launcher_on_path() else f"not linked into {_local_bin()}",
+        "" if on_path else f"not linked into {_local_bin()}",
+    )
+    todo(
+        "shell completion",
+        completion_installed(),
+        "claude-pet doctor --fix",
+        "" if completion_installed() else "tab completion not installed",
     )
     pid = _overlay_pid()
     print(f"  INFO  overlay: {'pid %d' % pid if pid else 'stopped'}")
@@ -603,22 +610,98 @@ def _link_launcher() -> None:
         return
     print(f"  linked {link} -> {target}")
 
-    path_entries = os.environ.get("PATH", "").split(os.pathsep)
-    if str(_local_bin()) not in path_entries:
-        print(f"  note: {_local_bin()} is not on PATH yet. Add it with:")
-        print(f'    echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.bashrc && exec $SHELL')
+    if str(_local_bin()) not in os.environ.get("PATH", "").split(os.pathsep):
+        _ensure_local_bin_on_path()
+
+
+#: Marker so the PATH line is added at most once and can be found again.
+RC_MARKER = "# added by claude-pet"
+
+#: Shell -> rc file, for putting ~/.local/bin on PATH.
+RC_FILES = {"zsh": ".zshrc", "bash": ".bashrc", "": ".profile"}
+
+
+def _ensure_local_bin_on_path() -> None:
+    """Append the PATH line to the user's shell rc, once.
+
+    Ubuntu's ~/.profile adds ~/.local/bin only if it already existed at login,
+    so creating it now is not enough -- without this, `claude-pet` keeps working
+    only as `./claude-pet` until the user edits a dotfile themselves.
+    """
+    shell = Path(os.environ.get("SHELL", "")).name
+    rc_path = Path.home() / RC_FILES.get(shell, RC_FILES[""])
+
+    try:
+        existing = rc_path.read_text(encoding="utf-8") if rc_path.exists() else ""
+    except OSError as exc:
+        print(f"claude-pet: could not read {rc_path}: {exc}", file=sys.stderr)
+        return
+
+    if RC_MARKER in existing:
+        print(f"  {rc_path} already sets PATH; run `exec $SHELL` to pick it up")
+        return
+
+    line = f'\n{RC_MARKER}\nexport PATH="$HOME/.local/bin:$PATH"\n'
+    try:
+        with rc_path.open("a", encoding="utf-8") as stream:
+            stream.write(line)
+    except OSError as exc:
+        print(f"claude-pet: could not update {rc_path}: {exc}", file=sys.stderr)
+        print('  add this yourself: export PATH="$HOME/.local/bin:$PATH"')
+        return
+    print(f"  added ~/.local/bin to PATH in {rc_path}")
+    print("  run `exec $SHELL` (or open a new terminal) to use `claude-pet` directly")
+
+
+def completion_target() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return Path(base) / "bash-completion" / "completions" / "claude-pet"
+
+
+def completion_installed() -> bool:
+    target = completion_target()
+    try:
+        return target.is_symlink() and target.resolve() == _completion_source().resolve()
+    except OSError:
+        return False
+
+
+def _completion_source() -> Path:
+    return launcher_path().parent / "completions" / "claude-pet.bash"
+
+
+def _install_completion() -> None:
+    source = _completion_source()
+    if not source.is_file():
+        print(f"claude-pet: {source} is missing", file=sys.stderr)
+        return
+    target = completion_target()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        target.symlink_to(source)
+    except OSError as exc:
+        print(f"claude-pet: could not install completion: {exc}", file=sys.stderr)
+        return
+    print(f"  linked {target}")
+    print("  run `exec $SHELL` (or open a new terminal) to get tab completion")
 
 
 def _finish_setup() -> int:
     """Do everything a fresh checkout still needs, then start the pet."""
     from . import launch, registry, sprites
 
-    has_pack = bool(config.discover())
+    # The bundled pack does not count here: it exists so a clone works offline,
+    # but a first setup should still fetch the nicer default when it can.
+    bundled = config.bundled_pets()
+    has_pack = any(bundled not in directory.parents for directory in config.discover().values())
     has_hooks = _hook_events_installed() >= len(HOOK_EVENTS)
     running = _overlay_pid() is not None
     linked = launcher_on_path()
+    completed = completion_installed()
 
-    if has_pack and has_hooks and running and linked:
+    if has_pack and has_hooks and running and linked and completed:
         print("Nothing to do: pack installed, hooks in place, on PATH, pet running.")
         return 0
 
@@ -626,17 +709,21 @@ def _finish_setup() -> int:
         print("putting claude-pet on your PATH...")
         _link_launcher()
 
+    if not completed:
+        print("installing shell completion...")
+        _install_completion()
+
     if not has_pack:
         print(f"installing pack {DEFAULT_PACK}...")
         try:
             installed = registry.install(DEFAULT_PACK, config.claude_home() / "pets")
             sprites.load_pet(installed["directory"])
+            config.update(pet=DEFAULT_PACK)
+            print(f"  installed {installed['id']} -> {installed['directory']}")
         except (registry.RegistryError, sprites.SpriteError) as exc:
-            print(f"claude-pet: {exc}", file=sys.stderr)
-            print("pick another with `claude-pet search`, then `claude-pet add <id>`")
-            return 1
-        config.update(pet=DEFAULT_PACK)
-        print(f"  installed {installed['id']} -> {installed['directory']}")
+            # Not fatal: the bundled pack means there is always something to show.
+            print(f"  could not fetch {DEFAULT_PACK}: {exc}")
+            print("  using the bundled pack instead; `claude-pet search` when you are online")
 
     if not has_hooks:
         print("installing hooks...")
@@ -748,7 +835,81 @@ def build_parser() -> argparse.ArgumentParser:
     hook.add_argument("event", nargs="?")
     hook.set_defaults(func=cmd_hook)
 
+    complete = subparsers.add_parser("_complete", help=argparse.SUPPRESS)
+    complete.add_argument("cword", type=int)
+    complete.add_argument("current")
+    complete.add_argument("previous")
+    complete.add_argument("sub")
+    complete.set_defaults(func=cmd_complete)
+
     return parser
+
+
+#: Values worth offering for `set <key>`, beyond booleans and free numbers.
+SETTING_CHOICES = {
+    "language": ("auto", "en", "ko"),
+    "bubble": ("active", "alerts", "never"),
+    "anchor": ("bottom-right", "bottom-left", "top-right", "top-left"),
+    "position": ("none",),
+}
+
+
+def _subcommands() -> list[str]:
+    parser = build_parser()
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes no public API
+        if isinstance(action, argparse._SubParsersAction):
+            return [name for name in action.choices if not name.startswith("_")]
+    return []
+
+
+def _options_for(subcommand: str) -> list[str]:
+    parser = build_parser()
+    for action in parser._actions:  # noqa: SLF001
+        if isinstance(action, argparse._SubParsersAction):
+            target = action.choices.get(subcommand)
+            if target is None:
+                return []
+            return [
+                option
+                for sub_action in target._actions  # noqa: SLF001
+                for option in sub_action.option_strings
+            ]
+    return []
+
+
+def cmd_complete(args: argparse.Namespace) -> int:
+    """Emit completion candidates for the shell. Filtering happens here.
+
+    Kept in Python rather than duplicated in shell script so the candidate
+    lists come from the real parser and cannot drift out of date.
+    """
+    cword, current, previous, subcommand = args.cword, args.current, args.previous, args.sub
+    candidates: list[str] = []
+
+    if cword <= 1:
+        candidates = _subcommands()
+    elif previous == "--pet" or (subcommand in {"use", "preview"} and cword == 2):
+        candidates = list(config.discover())
+    elif subcommand == "set" and cword == 2:
+        candidates = sorted(config.DEFAULTS)
+    elif subcommand == "set" and cword == 3:
+        key = previous
+        if key in SETTING_CHOICES:
+            candidates = list(SETTING_CHOICES[key])
+        elif isinstance(config.DEFAULTS.get(key), bool):
+            candidates = ["true", "false"]
+    elif subcommand == "search" and previous == "--sort":
+        candidates = ["popular", "new", "likes", "random"]
+    elif subcommand == "search" and previous == "--version":
+        candidates = ["1", "2"]
+
+    if current.startswith("-"):
+        candidates = _options_for(subcommand)
+
+    for candidate in sorted(set(candidates)):
+        if candidate.startswith(current):
+            print(candidate)
+    return 0
 
 
 def cmd_hook(args: argparse.Namespace) -> int:

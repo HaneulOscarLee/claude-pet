@@ -57,9 +57,15 @@ STATE_FPS = {
     "failed": 8,
     "waving": 10,
     "jumping": 12,
-    "running-right": 12,
-    "running-left": 12,
+    # A stroll, not a sprint: at 12fps with a 6px step the pet tore along the
+    # bottom of the screen, which reads as agitated rather than idle.
+    "running-right": 8,
+    "running-left": 8,
 }
+
+#: Seconds between wanders, and how long each lasts.
+WALK_PAUSE_RANGE = (12.0, 30.0)
+WALK_DURATION_RANGE = (2.0, 5.0)
 
 #: Bubble state labels. `language: auto` picks by locale and falls back to en.
 LABELS: dict[str, dict[str, str]] = {
@@ -179,7 +185,7 @@ class Overlay(Gtk.Window):
         self.pos_y = 0
         self.walking = 0          # -1 left, 0 still, +1 right
         self.walk_until = 0.0
-        self.next_walk_at = time.monotonic() + random.uniform(4.0, 12.0)
+        self.next_walk_at = time.monotonic() + random.uniform(*WALK_PAUSE_RANGE)
         self.look_index: int | None = None
 
         self.window_width = max(view.width, BUBBLE_WIDTH)
@@ -400,12 +406,12 @@ class Overlay(Gtk.Window):
             self.walking = 0
             self.visual_state = "idle"
             self.frame_index = 0
-            self.next_walk_at = now + random.uniform(5.0, 14.0)
+            self.next_walk_at = now + random.uniform(*WALK_PAUSE_RANGE)
             return
 
         if not self.walking and now >= self.next_walk_at:
             self.walking = random.choice((-1, 1))
-            self.walk_until = now + random.uniform(1.5, 4.0)
+            self.walk_until = now + random.uniform(*WALK_DURATION_RANGE)
             self.visual_state = "running-right" if self.walking > 0 else "running-left"
             self.frame_index = 0
             return
@@ -418,7 +424,8 @@ class Overlay(Gtk.Window):
         area = self._workarea()
         left_bound = area.x + EDGE_MARGIN - self.sprite_left
         right_bound = area.x + area.width - EDGE_MARGIN - self.sprite_left - self.view.width
-        new_x = self.pos_x + 6 * self.walking
+        step = max(1, int(self.settings.get("walk_speed") or 3))
+        new_x = self.pos_x + step * self.walking
         if new_x <= left_bound or new_x >= right_bound:
             self.walking *= -1
             self.visual_state = "running-right" if self.walking > 0 else "running-left"
