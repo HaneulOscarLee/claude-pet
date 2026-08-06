@@ -23,6 +23,33 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------ dependencies
 
+# Package names per distro family, for each thing we need.
+#   gtk     PyGObject and GTK 3 -- the overlay itself
+#   pillow  sprite decoding
+#   wmctrl  lets clicking the pet raise a terminal that is not running tmux
+#   notify  optional desktop notifications
+packages_for() {
+    local manager="$1" item="$2"
+    case "$manager:$item" in
+        apt:gtk)       echo "python3-gi python3-gi-cairo gir1.2-gtk-3.0" ;;
+        apt:pillow)    echo "python3-pil" ;;
+        apt:wmctrl)    echo "wmctrl" ;;
+        apt:notify)    echo "libnotify-bin" ;;
+        dnf:gtk)       echo "python3-gobject gtk3" ;;
+        dnf:pillow)    echo "python3-pillow" ;;
+        dnf:wmctrl)    echo "wmctrl" ;;
+        dnf:notify)    echo "libnotify" ;;
+        pacman:gtk)    echo "python-gobject gtk3" ;;
+        pacman:pillow) echo "python-pillow" ;;
+        pacman:wmctrl) echo "wmctrl" ;;
+        pacman:notify) echo "libnotify" ;;
+        zypper:gtk)    echo "python3-gobject gtk3" ;;
+        zypper:pillow) echo "python3-Pillow" ;;
+        zypper:wmctrl) echo "wmctrl" ;;
+        zypper:notify) echo "libnotify-tools" ;;
+    esac
+}
+
 install_dependencies() {
     [ "${CLAUDE_PET_NO_DEPS:-}" = "1" ] && return 0
     have python3 || die "python3 is required but not installed"
@@ -30,54 +57,43 @@ install_dependencies() {
     local missing=()
     python3 -c 'import gi' 2>/dev/null || missing+=(gtk)
     python3 -c 'import PIL' 2>/dev/null || missing+=(pillow)
-    [ ${#missing[@]} -eq 0 ] && return 0
-
-    local packages=()
-    local manager=""
-    if have apt-get; then
-        manager="apt"
-        for item in "${missing[@]}"; do
-            case "$item" in
-                gtk) packages+=(python3-gi python3-gi-cairo gir1.2-gtk-3.0) ;;
-                pillow) packages+=(python3-pil) ;;
-            esac
-        done
-    elif have dnf; then
-        manager="dnf"
-        for item in "${missing[@]}"; do
-            case "$item" in
-                gtk) packages+=(python3-gobject gtk3) ;;
-                pillow) packages+=(python3-pillow) ;;
-            esac
-        done
-    elif have pacman; then
-        manager="pacman"
-        for item in "${missing[@]}"; do
-            case "$item" in
-                gtk) packages+=(python-gobject gtk3) ;;
-                pillow) packages+=(python-pillow) ;;
-            esac
-        done
-    elif have zypper; then
-        manager="zypper"
-        for item in "${missing[@]}"; do
-            case "$item" in
-                gtk) packages+=(python3-gobject gtk3) ;;
-                pillow) packages+=(python3-Pillow) ;;
-            esac
-        done
-    else
-        say "install: missing ${missing[*]}, and no known package manager."
-        say "install: install PyGObject (GTK 3) and Pillow, then re-run."
+    have wmctrl || have xdotool || missing+=(wmctrl)
+    have notify-send || missing+=(notify)
+    if [ ${#missing[@]} -eq 0 ]; then
+        say "==> dependencies already present"
         return 0
     fi
 
+    local manager=""
+    for candidate in apt dnf pacman zypper; do
+        local binary="$candidate"
+        [ "$candidate" = "apt" ] && binary="apt-get"
+        if have "$binary"; then
+            manager="$candidate"
+            break
+        fi
+    done
+    if [ -z "$manager" ]; then
+        say "install: no known package manager; install these yourself:"
+        say "install:   PyGObject (GTK 3), Pillow, wmctrl, libnotify"
+        return 0
+    fi
+
+    local packages=()
+    for item in "${missing[@]}"; do
+        # shellcheck disable=SC2207  # deliberate word splitting: one name per word
+        packages+=($(packages_for "$manager" "$item"))
+    done
+    [ ${#packages[@]} -eq 0 ] && return 0
+
     say "==> installing ${packages[*]}"
+    say "    (sudo may ask for your password)"
+    # Not fatal: the overlay may still run, and setup reports what is missing.
     case "$manager" in
-        apt) sudo apt-get update -qq && sudo apt-get install -y "${packages[@]}" ;;
-        dnf) sudo dnf install -y "${packages[@]}" ;;
-        pacman) sudo pacman -S --noconfirm "${packages[@]}" ;;
-        zypper) sudo zypper --non-interactive install "${packages[@]}" ;;
+        apt) sudo apt-get update -qq && sudo apt-get install -y "${packages[@]}" || true ;;
+        dnf) sudo dnf install -y "${packages[@]}" || true ;;
+        pacman) sudo pacman -S --noconfirm "${packages[@]}" || true ;;
+        zypper) sudo zypper --non-interactive install "${packages[@]}" || true ;;
     esac
 }
 

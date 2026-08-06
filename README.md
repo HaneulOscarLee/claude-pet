@@ -35,13 +35,17 @@ is Ubuntu-specific beyond the dependency names.
 - Python 3.10+
 - PyGObject / GTK 3, and Pillow with WebP support
 
-On Ubuntu or Debian:
+The installer below handles all of this for you on apt, dnf, pacman and zypper
+systems. To do it by hand on Ubuntu or Debian:
 
 ```bash
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil libnotify-bin
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil \
+                 wmctrl libnotify-bin
 ```
 
-`libnotify-bin` is optional — only needed if you turn desktop notifications on.
+The last two are optional: `wmctrl` lets clicking the pet raise a terminal that
+is not running tmux, and `libnotify-bin` enables desktop notifications, which
+are off by default anyway.
 
 > **Why XWayland?** `_NET_WM_STATE_ABOVE` is the only always-on-top mechanism
 > mutter honours for an ordinary client, and `gtk-layer-shell` is wlroots-only.
@@ -55,8 +59,8 @@ curl -fsSL https://raw.githubusercontent.com/HaneulOscarLee/claude-pet/main/inst
 ```
 
 No git needed — it downloads the source tarball from GitHub into
-`~/.local/share/claude-pet`, installs the system packages it needs, and runs
-`setup`. Re-run it any time to upgrade. It refuses to overwrite a target
+`~/.local/share/claude-pet`, installs everything it needs through your package
+manager (GTK, Pillow, `wmctrl`, `libnotify`), and runs `setup`. Re-run it any time to upgrade. It refuses to overwrite a target
 directory that is not a previous install of its own.
 
 If piping a script into a shell is not your thing — reasonable — read it first
