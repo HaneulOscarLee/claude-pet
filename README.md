@@ -101,8 +101,13 @@ Notification ──> waiting  (holds until Claude moves on — never times out)
 ```
 
 Finishing a turn earns a hop, then the pet shows `done` for 20 seconds, then
-settles and starts wandering. Without that decay `review` would stick until
+settles and starts wandering. Without that dwell `review` would stick until
 your next prompt, and the idle and walking rows would never be seen.
+
+A dwell belongs to **the session that reported it**, not to the pet. When one
+session finishes while others are still working, that session says `done` for
+its 20 seconds and then hands the pet back — it does not drag everything to
+idle while real work is going on.
 
 Several Claude sessions at once collapse into the most urgent state:
 
@@ -118,9 +123,10 @@ terminals or projects you have open:
 | Live sessions | Pet shows |
 |---|---|
 | A `running`, B `review`, C `waiting` | **needs you** · *C's message* · `(3 sessions)` |
-| A `running`, B `review` | **done** `(2 sessions)` |
-| A `running` | **working** |
-| none | **idle**, and it starts wandering |
+| A `running`, B just finished | **done** `(2 sessions)` for 20s, then **working** |
+| A `running` | **working** · *tool name* |
+| all idle at their prompts | **idle**, and it starts wandering |
+| none | **idle** |
 
 Sessions are tracked by Claude's own session id and dropped on `SessionEnd`, or
 after six hours of silence if a session dies without one.
@@ -214,6 +220,7 @@ claude-pet set height 160             # sprite height in pixels
 claude-pet set anchor bottom-left     # bottom-right | bottom-left | top-right | top-left
 claude-pet set walk false             # stop wandering
 claude-pet set language ko
+claude-pet set bubble alerts          # only speak up when it needs you
 claude-pet set position none          # forget a dragged position, re-anchor
 ```
 
@@ -224,6 +231,7 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `anchor` | `bottom-right` | corner to start in |
 | `walk` | `true` | wander along the screen edge while idle |
 | `language` | `auto` | bubble labels: `auto` \| `en` \| `ko` |
+| `bubble` | `active` | when to speak: `active` (any non-idle state) \| `alerts` (only needs-you / done / failed) \| `never` |
 | `notifications` | `false` | also send a desktop notification |
 | `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
@@ -344,6 +352,11 @@ about **33 ms** per tool call.
 | `claude_pet/registry.py` | codex-pets.net API client and installer |
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |
+| `tests/test_aggregate.py` | multi-session aggregation and dwell behaviour |
+
+```bash
+python3 tests/test_aggregate.py    # stdlib only, no test runner needed
+```
 
 ## Troubleshooting
 
@@ -367,8 +380,12 @@ session does not pick up newly installed hooks. Run `claude-pet install-hooks`,
 then start a *new* session. `claude-pet status` shows whether events are
 arriving at all.
 
-**The pet never wanders.** Wandering only happens while `idle`. If a Claude
-session is mid-turn the state is `running`, which is correct.
+**The pet never wanders.** Wandering only happens while `idle`. If any session
+is mid-turn the state is `running`, which is correct — wait until every session
+is sitting at its prompt.
+
+**The pet is silent.** With `bubble: alerts` it only speaks for needs-you, done
+and failed. The default `active` also narrates tool calls.
 
 **A pack shows as `broken` in `list`.** The message names the reason. The usual
 cause is an atlas that is not 8 columns wide or whose height is not divisible

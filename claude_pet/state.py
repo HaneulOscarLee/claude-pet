@@ -28,6 +28,13 @@ PRIORITY: tuple[str, ...] = (
 #: Sessions quieter than this are treated as gone.
 SESSION_TTL_SECONDS = 6 * 60 * 60
 
+#: How long a state stays interesting *for the session that reported it*.
+#: Past this, that session counts as idle when aggregating, so a finished
+#: session announces itself and then stops speaking for the others. States
+#: absent here never expire: `waiting` must keep asking, and `running` ends
+#: only when Claude says so.
+DWELL_SECONDS: dict[str, float] = {"waving": 3.0, "review": 20.0, "failed": 20.0}
+
 
 def state_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
@@ -128,8 +135,23 @@ def update(session_id: str, **fields: Any) -> dict[str, Any]:
                 pass
 
 
+def effective_state(session: dict[str, Any], now: float) -> str:
+    """The state this session still deserves to speak for, given its dwell."""
+    reported = session.get("state")
+    if reported not in PRIORITY:
+        return "idle"
+    dwell = DWELL_SECONDS.get(reported)
+    if dwell is not None and now - session["ts"] > dwell:
+        return "idle"
+    return reported
+
+
 def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Collapse every live session into the one state the pet should show."""
+    """Collapse every live session into the one state the pet should show.
+
+    Time-dependent: the same file aggregates differently as dwells expire, so
+    callers should re-run this on a timer rather than only on file changes.
+    """
     data = read() if data is None else data
     now = time.time()
     live = [
@@ -140,17 +162,18 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
         and now - session["ts"] <= SESSION_TTL_SECONDS
     ]
     if not live:
-        return {"state": "idle", "sessions": 0, "detail": "", "since": now}
+        return {"state": "idle", "sessions": 0, "detail": "", "cwd": "", "since": now}
 
     order = {name: index for index, name in enumerate(PRIORITY)}
-    winner = min(
-        live,
-        key=lambda session: (order.get(session.get("state"), len(PRIORITY)), -session["ts"]),
+    ranked = [(effective_state(session, now), session) for session in live]
+    state_name, winner = min(
+        ranked, key=lambda pair: (order.get(pair[0], len(PRIORITY)), -pair[1]["ts"])
     )
     return {
-        "state": winner.get("state") if winner.get("state") in PRIORITY else "idle",
+        "state": state_name,
         "sessions": len(live),
-        "detail": str(winner.get("detail") or ""),
+        # An expired session has nothing left to say, so drop its stale detail.
+        "detail": str(winner.get("detail") or "") if state_name != "idle" else "",
         "cwd": str(winner.get("cwd") or ""),
         "since": winner.get("ts", now),
     }

@@ -17,6 +17,7 @@ DEFAULTS: dict[str, Any] = {
     # desktop notification on top of it is just the same news twice.
     "notifications": False,
     "language": "auto",   # bubble label language: auto (locale) | en | ko
+    "bubble": "active",   # when to show the bubble: active | alerts | never
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "autostart": True,    # let the SessionStart hook launch the overlay
     "position": None,     # [x, y] once the user drags the pet somewhere
