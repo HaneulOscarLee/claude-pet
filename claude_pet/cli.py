@@ -33,7 +33,9 @@ HOOK_MARKER = "claude-pet"
 
 
 def launcher_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "claude-pet"
+    from . import launch
+
+    return launch.launcher_path()
 
 
 # --------------------------------------------------------------------- pets
@@ -178,14 +180,25 @@ def cmd_preview(args: argparse.Namespace) -> int:
 
 
 def _overlay_pid() -> int | None:
-    try:
-        pid = int(state.pid_path().read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
-    return pid if Path(f"/proc/{pid}").exists() else None
+    from . import launch
+
+    return launch.overlay_pid()
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from . import launch
+
+    if args.detach:
+        if _overlay_pid() is not None:
+            print("overlay is already running")
+            return 0
+        pid = launch.spawn_detached(reason="cli")
+        if pid is None:
+            print("claude-pet: could not start the overlay", file=sys.stderr)
+            return 1
+        print(f"overlay started detached (pid {pid}); it outlives this terminal")
+        return 0
+
     from . import overlay
 
     return overlay.run(args.pet)
@@ -466,10 +479,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="start the overlay")
     run.add_argument("--pet", help="pack id to use for this run only")
+    run.add_argument(
+        "--detach", action="store_true", help="run in the background, surviving this terminal"
+    )
     run.set_defaults(func=cmd_run)
 
     restart = subparsers.add_parser("restart", help="restart the overlay")
     restart.add_argument("--pet")
+    restart.add_argument("--detach", action="store_true")
     restart.set_defaults(func=cmd_restart)
 
     demo = subparsers.add_parser("demo", help="cycle the window through every animation row")

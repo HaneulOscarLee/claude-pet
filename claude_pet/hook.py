@@ -8,13 +8,10 @@ exits 0 -- a broken pet must never break a session.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
-from . import config, state
+from . import config, launch, state
 
 #: Hook event -> pet state. `None` means "forget this session".
 EVENT_STATES: dict[str, str | None] = {
@@ -58,55 +55,6 @@ def _tool_failed(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _overlay_alive() -> bool:
-    try:
-        pid = int(state.pid_path().read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return False
-    return Path(f"/proc/{pid}").exists()
-
-
-def _spawn_overlay() -> None:
-    """Start the overlay detached, so the pet appears without a manual step."""
-    if _overlay_alive():
-        return
-    try:
-        log = state.state_dir()
-        log.mkdir(parents=True, exist_ok=True)
-        handle = open(log / "overlay.log", "ab", buffering=0)  # noqa: SIM115 - handed to child
-    except OSError:
-        return
-    root = Path(__file__).resolve().parent.parent
-    environment = {**os.environ, "CLAUDE_PET_AUTOSTARTED": "1"}
-    existing = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = f"{root}:{existing}" if existing else str(root)
-
-    # Go through the launcher, which is the one place that pins
-    # GDK_BACKEND=x11. Calling python directly would start the overlay on the
-    # Wayland backend, where mutter ignores always-on-top.
-    launcher = root / "claude-pet"
-    if os.access(launcher, os.X_OK):
-        argv = [str(launcher), "run"]
-    else:
-        argv = [sys.executable, "-m", "claude_pet", "run"]
-        environment.setdefault("GDK_BACKEND", "x11")
-
-    try:
-        subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=handle,
-            stderr=handle,
-            start_new_session=True,
-            cwd=str(root),
-            env=environment,
-        )
-    except OSError:
-        pass
-    finally:
-        handle.close()
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     forced_event = argv[0] if argv else None
@@ -142,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if event == "SessionStart" and config.load().get("autostart", True):
-        _spawn_overlay()
+        launch.spawn_detached(reason="SessionStart")
     return 0
 
 

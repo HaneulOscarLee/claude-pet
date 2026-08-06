@@ -72,6 +72,8 @@ LABELS: dict[str, dict[str, str]] = {
         "waving": "session started",
         "menu.walk": "Wander around",
         "menu.notify": "Desktop notifications",
+        "menu.autostart": "Start with Claude",
+        "menu.exit_idle": "Quit when no sessions",
         "menu.quit": "Quit",
     },
     "ko": {
@@ -83,6 +85,8 @@ LABELS: dict[str, dict[str, str]] = {
         "waving": "세션 시작",
         "menu.walk": "돌아다니기",
         "menu.notify": "데스크톱 알림",
+        "menu.autostart": "클로드와 함께 시작",
+        "menu.exit_idle": "세션 없으면 종료",
         "menu.quit": "종료",
     },
 }
@@ -152,6 +156,7 @@ class Overlay(Gtk.Window):
         self.visual_until: float | None = None
         self.visual_return: str | None = None
         self.bubble_pinned = False
+        self.empty_since: float | None = None
 
         self.dragging = False
         # The overlay owns its position. Reading it back from GTK on every walk
@@ -265,8 +270,33 @@ class Overlay(Gtk.Window):
     def _poll_state(self) -> bool:
         # Re-aggregated every time, not only when the file changes: dwells
         # expire on the clock, so the same file yields a different state later.
-        self._adopt(state.aggregate())
+        snapshot = state.aggregate()
+        self._adopt(snapshot)
+        self._maybe_exit(snapshot)
         return True
+
+    def _maybe_exit(self, snapshot: dict[str, Any]) -> None:
+        """Shut down once every Claude session is gone.
+
+        Waits out a grace period first, so closing one terminal and opening
+        another does not kill the pet in between.
+        """
+        if not self.settings.get("exit_when_no_sessions", True):
+            self.empty_since = None
+            return
+        if snapshot.get("sessions"):
+            self.empty_since = None
+            return
+
+        now = time.monotonic()
+        if self.empty_since is None:
+            self.empty_since = now
+            return
+
+        grace = float(self.settings.get("exit_grace_seconds") or 0)
+        if now - self.empty_since >= grace:
+            print("claude-pet: no Claude sessions left, exiting", flush=True)
+            self.quit()
 
     def _adopt(self, snapshot: dict[str, Any]) -> None:
         new_state = snapshot.get("state") or "idle"
@@ -536,6 +566,16 @@ class Overlay(Gtk.Window):
         notify.set_active(bool(self.settings.get("notifications", False)))
         notify.connect("toggled", self._on_toggle, "notifications")
         menu.append(notify)
+
+        autostart = Gtk.CheckMenuItem(label=self.labels["menu.autostart"])
+        autostart.set_active(bool(self.settings.get("autostart", True)))
+        autostart.connect("toggled", self._on_toggle, "autostart")
+        menu.append(autostart)
+
+        exit_idle = Gtk.CheckMenuItem(label=self.labels["menu.exit_idle"])
+        exit_idle.set_active(bool(self.settings.get("exit_when_no_sessions", True)))
+        exit_idle.connect("toggled", self._on_toggle, "exit_when_no_sessions")
+        menu.append(exit_idle)
 
         menu.append(Gtk.SeparatorMenuItem())
         quit_item = Gtk.MenuItem(label=self.labels["menu.quit"])

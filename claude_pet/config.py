@@ -20,6 +20,8 @@ DEFAULTS: dict[str, Any] = {
     "bubble": "active",   # when to show the bubble: active | alerts | never
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "autostart": True,    # let the SessionStart hook launch the overlay
+    "exit_when_no_sessions": True,  # quit once every Claude session is gone
+    "exit_grace_seconds": 60,  # how long to wait first, in case one reopens
     "position": None,     # [x, y] once the user drags the pet somewhere
 }
 

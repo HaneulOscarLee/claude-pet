@@ -72,9 +72,20 @@ claude-pet run                   # start the overlay
 
 Then start a new Claude Code session. That is it — the pet follows along.
 
-After `install-hooks`, the `SessionStart` hook also **starts the overlay for
-you**, so in day-to-day use you never run `claude-pet run` by hand. Disable
-that with `claude-pet set autostart false`.
+After `install-hooks` you never start or stop the pet by hand:
+
+- **starts with Claude** — the `SessionStart` hook launches the overlay
+  detached, so it survives the terminal that started it
+- **quits with Claude** — once every session has ended, the pet waits out a
+  60 second grace period (in case you are just reopening a terminal) and exits
+
+Both are on by default and can be toggled from the pet's right-click menu, or
+with `claude-pet set autostart false` / `set exit_when_no_sessions false`.
+`exit_grace_seconds` sets the wait.
+
+If you do start it yourself, `claude-pet run --detach` backgrounds it so
+closing the terminal does not take the pet with it. Plain `claude-pet run`
+stays in the foreground, which is what you want for debugging.
 
 ## What the pet shows
 
@@ -183,7 +194,8 @@ $ claude-pet list
 ### Overlay
 
 ```bash
-claude-pet run                  # start it
+claude-pet run                  # start it in the foreground
+claude-pet run --detach         # ...or in the background, outliving the terminal
 claude-pet run --pet dario      # start with a specific pack, just this once
 claude-pet restart              # after changing the pack or settings
 claude-pet stop
@@ -235,6 +247,8 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `notifications` | `false` | also send a desktop notification |
 | `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
+| `exit_when_no_sessions` | `true` | quit once every Claude session has ended |
+| `exit_grace_seconds` | `60` | how long to wait first, in case one reopens |
 | `position` | `null` | remembered drag position |
 
 Stored in `~/.config/claude-pet/config.json`.
@@ -258,7 +272,7 @@ so this is how you get a picture of the window.
 |---|---|
 | drag | move the pet; the position is remembered |
 | double-click | pin / unpin the speech bubble |
-| right-click | switch pack, toggle wandering and notifications, quit |
+| right-click | switch pack; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
 
 Clicks land only on the sprite itself — the rest of the window is
 click-through, so the pet never steals a click meant for what is underneath.
