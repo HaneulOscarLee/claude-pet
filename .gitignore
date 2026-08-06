@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+
+# oh-my-claudecode session state (session ids, local transcript paths)
+.omc/
+
+# `preview` / `snapshot` output
+*-preview.png
+*.snapshot.png
+
+.venv/

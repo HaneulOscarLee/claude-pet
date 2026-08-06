@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Entry point for claude-pet. Safe to call by absolute path from Claude hooks.
+set -euo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+export PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
+
+# GTK must pick its backend before Python starts. Only X11/XWayland honours
+# _NET_WM_STATE_ABOVE under mutter, which is what keeps the pet on top.
+export GDK_BACKEND="${CLAUDE_PET_GDK_BACKEND:-x11}"
+
+exec python3 -m claude_pet "$@"
