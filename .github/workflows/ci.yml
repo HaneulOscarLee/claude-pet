@@ -22,6 +22,12 @@ jobs:
       - name: Compile every module
         run: python3 -m compileall -q claude_pet tools tests
 
+      - name: Shell scripts parse
+        run: |
+          bash -n install.sh
+          bash -n claude-pet
+          bash -n completions/claude-pet.bash
+
       # Stdlib only, so these need no display.
       - name: Aggregation and liveness tests
         run: python3 tests/test_aggregate.py

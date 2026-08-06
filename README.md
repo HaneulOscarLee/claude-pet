@@ -51,12 +51,24 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil libnotif
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/HaneulOscarLee/claude-pet/main/install.sh | bash
+```
+
+No git needed — it downloads the source tarball from GitHub into
+`~/.local/share/claude-pet`, installs the system packages it needs, and runs
+`setup`. Re-run it any time to upgrade. It refuses to overwrite a target
+directory that is not a previous install of its own.
+
+If piping a script into a shell is not your thing — reasonable — read it first
+([`install.sh`](install.sh)), or clone and run `setup` yourself:
+
+```bash
 git clone https://github.com/HaneulOscarLee/claude-pet.git
 cd claude-pet
 ./claude-pet setup
 ```
 
-That is the whole install. `setup`:
+Either way, `setup`:
 
 - symlinks `claude-pet` into `~/.local/bin`, and adds that to `PATH` in your
   shell rc if it is not there already, so `claude-pet` works from any directory
@@ -81,9 +93,12 @@ it.
 
 Then start a new Claude Code session. That is it — the pet follows along.
 
-Nothing gets built and no virtualenv is created; it runs from the checkout, so
-keep the directory where it is (or re-run `setup` after moving it, since the
-hooks record an absolute path).
+Nothing gets built and no virtualenv is created; it runs from wherever it was
+installed, so keep that directory where it is — or re-run `setup` after moving
+it, since the hooks record an absolute path.
+
+Installer knobs: `CLAUDE_PET_DIR` to install elsewhere, `CLAUDE_PET_REF` for a
+branch or tag, `CLAUDE_PET_NO_DEPS=1` to skip the system packages.
 
 ### Checking on it
 
