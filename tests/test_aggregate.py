@@ -69,11 +69,27 @@ def liveness_checks() -> list[tuple[str, bool]]:
     impostor = {"state": "running", "ts": NOW, "locator": {"claude_pid": own_pid}}
     results.append(("live pid with wrong comm is not live", not state.is_alive(impostor, NOW)))
 
+    # Entries with no recorded pid predate pid recording. They fall back to
+    # "is any Claude running at all", because trusting them outright kept the
+    # pet alive for the whole TTL after everything had closed.
     no_locator = {"state": "running", "ts": NOW}
-    results.append(("session without a locator is trusted", state.is_alive(no_locator, NOW)))
-
     empty_locator = {"state": "running", "ts": NOW, "locator": {}}
-    results.append(("locator without a pid is trusted", state.is_alive(empty_locator, NOW)))
+    original = state.any_claude_running
+    try:
+        state.any_claude_running = lambda: True
+        results.append(("no pid + Claude running -> live", state.is_alive(no_locator, NOW)))
+        results.append(("empty locator + Claude running -> live", state.is_alive(empty_locator, NOW)))
+        state.any_claude_running = lambda: False
+        results.append(("no pid + no Claude -> dead", not state.is_alive(no_locator, NOW)))
+        results.append(
+            ("no pid + no Claude aggregates to idle",
+             state.aggregate({"sessions": {"a": no_locator}})["state"] == "idle")
+        )
+    finally:
+        state.any_claude_running = original
+
+    # The real sweep must find this very session's Claude process.
+    results.append(("any_claude_running finds a live Claude", state.any_claude_running()))
 
     mixed = {"sessions": {"dead": gone, "live": session("waiting", 1)}}
     aggregated = state.aggregate(mixed)

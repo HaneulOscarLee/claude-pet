@@ -21,7 +21,10 @@ DEFAULTS: dict[str, Any] = {
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "autostart": True,    # let the SessionStart hook launch the overlay
     "exit_when_no_sessions": True,  # quit once every Claude session is gone
-    "exit_grace_seconds": 60,  # how long to wait first, in case one reopens
+    # Long enough to survive swapping terminals, short enough that "did it
+    # actually quit?" is answerable without a coffee break. Overshooting costs
+    # little either way: the SessionStart hook brings the pet straight back.
+    "exit_grace_seconds": 30,
     "position": None,     # [x, y] once the user drags the pet somewhere
 }
 
@@ -43,6 +46,19 @@ def load() -> dict[str, Any]:
         return settings
     if isinstance(stored, dict):
         settings.update({key: value for key, value in stored.items() if key in DEFAULTS})
+    return settings
+
+
+def update(**changes: Any) -> dict[str, Any]:
+    """Merge `changes` into the stored config, leaving other keys as they are.
+
+    The overlay must never write back a whole snapshot of its in-memory
+    settings: it would undo any `claude-pet set` made while it was running,
+    which is exactly what happens on `set` followed by `restart`.
+    """
+    settings = load()
+    settings.update({key: value for key, value in changes.items() if key in DEFAULTS})
+    save(settings)
     return settings
 
 

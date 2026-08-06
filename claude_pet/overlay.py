@@ -570,7 +570,7 @@ class Overlay(Gtk.Window):
             self._on_click()
         elif self.dragging:
             self.dragging = False
-            config.save(self.settings)
+            config.update(position=self.settings.get("position"))
         return False
 
     def _on_click(self) -> None:
@@ -638,17 +638,16 @@ class Overlay(Gtk.Window):
         if not item.get_active():
             return
         self.settings["pet"] = pet_id
-        config.save(self.settings)
+        config.update(pet=pet_id)
         self.quit(restart=True)
 
     def _on_toggle(self, item, key: str) -> None:
         self.settings[key] = item.get_active()
-        config.save(self.settings)
+        config.update(**{key: self.settings[key]})
 
     # ---------------------------------------------------------------- teardown
 
     def quit(self, restart: bool = False) -> None:
-        config.save(self.settings)
         try:
             state.pid_path().unlink()
         except OSError:

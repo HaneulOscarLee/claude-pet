@@ -51,33 +51,45 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil libnotif
 ```bash
 git clone https://github.com/HaneulOscarLee/claude-pet.git
 cd claude-pet
-./claude-pet doctor          # confirm the environment is ready
+./claude-pet setup
 ```
 
-There is nothing to build and no virtualenv to create. Optionally put it on
-your `PATH`:
+That is the whole install. `setup` installs a sprite pack, wires the hooks into
+`~/.claude/settings.json`, symlinks `claude-pet` into `~/.local/bin` so you can
+run it from anywhere, and starts the pet. It is idempotent — run it again and it
+tells you there is nothing to do. `claude-pet doctor --fix` is the same thing.
+
+Then start a new Claude Code session. That is it — the pet follows along.
+
+Nothing gets built and no virtualenv is created; it runs from the checkout, so
+keep the directory where it is (or re-run `setup` after moving it, since the
+hooks record an absolute path).
+
+### Checking on it
 
 ```bash
-ln -s "$PWD/claude-pet" ~/.local/bin/claude-pet
+claude-pet doctor
 ```
 
-## Quick start
+`doctor` distinguishes three things: `FAIL` is genuinely broken, `TODO` is a
+setup step not taken yet, and `--` is an optional extra you can live without.
+Only `FAIL` is a problem, and only `FAIL` makes it exit non-zero.
+
+### Picking a different pack
 
 ```bash
 claude-pet search                # browse the gallery
-claude-pet add clawd             # install a pack
-claude-pet install-hooks         # wire into ~/.claude/settings.json
-claude-pet run                   # start the overlay
+claude-pet add doro-v2-roshan    # install another
+claude-pet use doro-v2-roshan
+claude-pet restart
 ```
-
-Then start a new Claude Code session. That is it — the pet follows along.
 
 After `install-hooks` you never start or stop the pet by hand:
 
 - **starts with Claude** — the `SessionStart` hook launches the overlay
   detached, so it survives the terminal that started it
 - **quits with Claude** — once every session has ended, the pet waits out a
-  60 second grace period (in case you are just reopening a terminal) and exits.
+  30 second grace period (in case you are just reopening a terminal) and exits.
   `SessionEnd` is the clean signal, but it never arrives when Claude is killed
   outright — a terminal closed with its window button, a crash, a reboot — so
   each session's Claude pid is recorded and checked directly. A session whose
@@ -219,10 +231,13 @@ state file: /home/you/.local/state/claude-pet/state.json
 ### Integration
 
 ```bash
+claude-pet setup                      # pack + hooks + PATH link + start
+claude-pet doctor                     # environment + integration check
+claude-pet doctor --fix               # same as setup
+
 claude-pet install-hooks              # ~/.claude/settings.json (global)
 claude-pet install-hooks --project    # ./.claude/settings.json (this repo only)
 claude-pet uninstall-hooks
-claude-pet doctor                     # environment + integration check
 ```
 
 `install-hooks` **merges** into your existing settings: it never touches hooks
@@ -252,7 +267,7 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
 | `exit_when_no_sessions` | `true` | quit once every Claude session has ended |
-| `exit_grace_seconds` | `60` | how long to wait first, in case one reopens |
+| `exit_grace_seconds` | `30` | how long to wait first, in case one reopens |
 | `position` | `null` | remembered drag position |
 
 Stored in `~/.config/claude-pet/config.json`.
@@ -431,7 +446,7 @@ is sitting at its prompt.
 and failed. The default `active` also narrates tool calls.
 
 **The pet does not exit when I close Claude.** Give it `exit_grace_seconds`
-(60 by default) — closing a terminal and checking a few seconds later is too
+(30 by default) — closing a terminal and checking a few seconds later is too
 soon. `claude-pet status` shows the auto-exit setting and lists every session
 it still counts, marking any whose Claude process has died. If a session lingers
 there with a live pid, that Claude really is still running somewhere.

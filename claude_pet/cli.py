@@ -236,6 +236,10 @@ def cmd_restart(args: argparse.Namespace) -> int:
         if _overlay_pid() is None:
             break
         time.sleep(0.1)
+
+    # Detached by default, unlike `run`: restarting is how you apply a setting,
+    # and the pet should not end up tied to whichever terminal you typed it in.
+    args.detach = not getattr(args, "foreground", False)
     return cmd_run(args)
 
 
@@ -323,6 +327,16 @@ def _read_settings(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _hook_events_installed() -> int:
+    """How many hook events already point at this checkout."""
+    settings = _read_settings(config.claude_home() / "settings.json")
+    return sum(
+        1
+        for entries in (settings.get("hooks") or {}).values()
+        if isinstance(entries, list) and any(_entry_is_ours(entry) for entry in entries)
+    )
+
+
 def _entry_is_ours(entry: Any) -> bool:
     """True when a hooks[] entry was written by `install-hooks`."""
     if not isinstance(entry, dict):
@@ -394,16 +408,31 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
 # ------------------------------------------------------------------- doctor
 
 
-def cmd_doctor(_args: argparse.Namespace) -> int:
+def cmd_doctor(args: argparse.Namespace) -> int:
     from . import sprites
 
+    # Three outcomes, not two. A fresh clone has no packs and no hooks, and
+    # click-to-jump is optional -- calling any of that FAIL made a working
+    # checkout look broken.
     problems = 0
+    next_steps: list[str] = []
 
     def check(label: str, ok: bool, detail: str = "") -> None:
+        """A hard requirement: without it the pet cannot run."""
         nonlocal problems
         print(f"  {'OK  ' if ok else 'FAIL'}  {label}{'  — ' + detail if detail else ''}")
         if not ok:
             problems += 1
+
+    def todo(label: str, done: bool, command: str, detail: str = "") -> None:
+        """A setup step the user still has to take. Not a fault."""
+        print(f"  {'OK  ' if done else 'TODO'}  {label}{'  — ' + detail if detail else ''}")
+        if not done:
+            next_steps.append(command)
+
+    def optional(label: str, ok: bool, detail: str = "") -> None:
+        """A nice-to-have. Absence is never a problem."""
+        print(f"  {'OK  ' if ok else '--  '}  {label}{'  — ' + detail if detail else ''}")
 
     print("environment")
     session = os.environ.get("XDG_SESSION_TYPE", "?")
@@ -430,11 +459,20 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     from shutil import which
 
-    check("notify-send", which("notify-send") is not None, "without libnotify-bin, notifications are skipped")
+    optional(
+        "notify-send",
+        which("notify-send") is not None,
+        "install libnotify-bin for desktop notifications (off by default anyway)",
+    )
 
     print("\npets")
     available = config.discover()
-    check("installed packs", bool(available), f"{len(available)} found" if available else "claude-pet add <id>")
+    todo(
+        "installed packs",
+        bool(available),
+        "claude-pet add clawd",
+        f"{len(available)} found" if available else "none yet, pick one from `claude-pet search`",
+    )
     for pet_id, directory in available.items():
         try:
             pet = sprites.load_pet(directory)
@@ -451,10 +489,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         for event, entries in (settings.get("hooks") or {}).items()
         if isinstance(entries, list) and any(_entry_is_ours(entry) for entry in entries)
     ]
-    check(
+    todo(
         "hooks installed",
         len(installed_events) >= len(HOOK_EVENTS),
-        f"{len(installed_events)}/{len(HOOK_EVENTS)} — claude-pet install-hooks",
+        "claude-pet install-hooks",
+        f"{len(installed_events)}/{len(HOOK_EVENTS)} events",
+    )
+    todo(
+        "claude-pet on PATH",
+        launcher_on_path(),
+        "claude-pet doctor --fix",
+        "" if launcher_on_path() else f"not linked into {_local_bin()}",
     )
     pid = _overlay_pid()
     print(f"  INFO  overlay: {'pid %d' % pid if pid else 'stopped'}")
@@ -463,15 +508,150 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     methods = jump.capabilities()
     usable = [name for name, ok in methods.items() if ok]
-    check(
-        "click-to-jump",
-        bool(usable),
-        ", ".join(usable) if usable else "needs tmux, or wmctrl/xdotool on X11",
-    )
-    if not methods["x11"] and os.environ.get("XDG_SESSION_TYPE") == "wayland":
-        print("  INFO  a Wayland terminal cannot be raised by another app; run Claude in tmux")
-    print(f"\n{'all good' if not problems else f'{problems} item(s) need attention'}")
-    return 1 if problems else 0
+    session_type = os.environ.get("XDG_SESSION_TYPE", "")
+    if usable:
+        hint = ", ".join(usable)
+    elif session_type == "wayland":
+        hint = "run Claude in tmux; a Wayland terminal cannot be raised by another app"
+    else:
+        hint = "install wmctrl (or xdotool) to raise the terminal, or run Claude in tmux"
+    optional("click-to-jump", bool(usable), hint)
+    if usable and not methods["x11"] and session_type != "wayland":
+        print("  INFO  install wmctrl to also raise non-tmux terminals")
+
+    print()
+    if problems:
+        print(f"{problems} item(s) need attention")
+        _print_dependency_hint()
+        return 1
+
+    running = _overlay_pid() is not None
+    if getattr(args, "fix", False):
+        return _finish_setup()
+
+    if next_steps or not running:
+        print("Nothing broken. Run `claude-pet doctor --fix` to finish setting up, or:")
+        for step in next_steps:
+            print(f"  {step}")
+        if not running:
+            print("  claude-pet run --detach")
+    else:
+        print("all good")
+    return 0
+
+
+#: Installed by `--fix` when no pack is present. Pixel Clawd, so the pet that
+#: watches Claude Code looks the part.
+DEFAULT_PACK = "clawd"
+
+#: Package names per distro family, for the one thing `--fix` will not do
+#: itself: installing system packages needs root.
+DEPENDENCY_COMMANDS = (
+    ("apt-get", "sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil"),
+    ("dnf", "sudo dnf install python3-gobject gtk3 python3-pillow"),
+    ("pacman", "sudo pacman -S python-gobject gtk3 python-pillow"),
+    ("zypper", "sudo zypper install python3-gobject gtk3 python3-Pillow"),
+)
+
+
+def _print_dependency_hint() -> None:
+    from shutil import which
+
+    for manager, command in DEPENDENCY_COMMANDS:
+        if which(manager):
+            print(f"\nMissing system packages are installed with:\n  {command}")
+            return
+
+
+def _local_bin() -> Path:
+    return Path.home() / ".local" / "bin"
+
+
+def launcher_on_path() -> bool:
+    """Whether typing `claude-pet` anywhere already runs this checkout."""
+    from shutil import which
+
+    found = which("claude-pet")
+    if not found:
+        return False
+    try:
+        return Path(found).resolve() == launcher_path().resolve()
+    except OSError:
+        return False
+
+
+def _link_launcher() -> None:
+    """Symlink the launcher into ~/.local/bin so `claude-pet` just works."""
+    link = _local_bin() / "claude-pet"
+    target = launcher_path()
+
+    if link.is_symlink() or link.exists():
+        try:
+            if link.resolve() == target.resolve():
+                print(f"  {link} already points here")
+            else:
+                print(f"claude-pet: {link} exists and points elsewhere; left alone", file=sys.stderr)
+        except OSError:
+            print(f"claude-pet: {link} is a broken link; left alone", file=sys.stderr)
+        return
+
+    try:
+        _local_bin().mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    except OSError as exc:
+        print(f"claude-pet: could not link into {_local_bin()}: {exc}", file=sys.stderr)
+        return
+    print(f"  linked {link} -> {target}")
+
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if str(_local_bin()) not in path_entries:
+        print(f"  note: {_local_bin()} is not on PATH yet. Add it with:")
+        print(f'    echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.bashrc && exec $SHELL')
+
+
+def _finish_setup() -> int:
+    """Do everything a fresh checkout still needs, then start the pet."""
+    from . import launch, registry, sprites
+
+    has_pack = bool(config.discover())
+    has_hooks = _hook_events_installed() >= len(HOOK_EVENTS)
+    running = _overlay_pid() is not None
+    linked = launcher_on_path()
+
+    if has_pack and has_hooks and running and linked:
+        print("Nothing to do: pack installed, hooks in place, on PATH, pet running.")
+        return 0
+
+    if not linked:
+        print("putting claude-pet on your PATH...")
+        _link_launcher()
+
+    if not has_pack:
+        print(f"installing pack {DEFAULT_PACK}...")
+        try:
+            installed = registry.install(DEFAULT_PACK, config.claude_home() / "pets")
+            sprites.load_pet(installed["directory"])
+        except (registry.RegistryError, sprites.SpriteError) as exc:
+            print(f"claude-pet: {exc}", file=sys.stderr)
+            print("pick another with `claude-pet search`, then `claude-pet add <id>`")
+            return 1
+        config.update(pet=DEFAULT_PACK)
+        print(f"  installed {installed['id']} -> {installed['directory']}")
+
+    if not has_hooks:
+        print("installing hooks...")
+        cmd_install_hooks(argparse.Namespace(project=False))
+
+    if not running:
+        print("starting the pet...")
+        pid = launch.spawn_detached(reason="doctor --fix")
+        if pid is None:
+            print("claude-pet: could not start the overlay; see `claude-pet run`", file=sys.stderr)
+            return 1
+        print(f"  overlay running detached (pid {pid})")
+
+    print("\nDone. The pet now starts with Claude and quits when the last session ends.")
+    return 0
 
 
 # ---------------------------------------------------------------- entrypoint
@@ -519,9 +699,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.set_defaults(func=cmd_run)
 
-    restart = subparsers.add_parser("restart", help="restart the overlay")
+    restart = subparsers.add_parser("restart", help="restart the overlay (detached)")
     restart.add_argument("--pet")
-    restart.add_argument("--detach", action="store_true")
+    restart.add_argument(
+        "--foreground", action="store_true", help="stay attached to this terminal"
+    )
     restart.set_defaults(func=cmd_restart)
 
     demo = subparsers.add_parser("demo", help="cycle the window through every animation row")
@@ -538,7 +720,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("stop", help="stop the overlay").set_defaults(func=cmd_stop)
     subparsers.add_parser("status", help="show the current state and live sessions").set_defaults(func=cmd_status)
-    subparsers.add_parser("doctor", help="check the environment and integration").set_defaults(func=cmd_doctor)
+    doctor = subparsers.add_parser("doctor", help="check the environment and integration")
+    doctor.add_argument(
+        "--fix",
+        action="store_true",
+        help="install a pack and the hooks, link onto PATH, and start the pet",
+    )
+    doctor.set_defaults(func=cmd_doctor)
+
+    setup = subparsers.add_parser("setup", help="one-command setup (same as doctor --fix)")
+    setup.set_defaults(func=cmd_doctor, fix=True)
 
     setter = subparsers.add_parser("set", help="change a setting")
     setter.add_argument("key")

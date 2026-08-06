@@ -79,6 +79,47 @@ def _write(data: dict[str, Any]) -> None:
         raise
 
 
+#: `comm` of the Claude Code process.
+CLAUDE_COMM = "claude"
+
+#: `any_claude_running()` is a /proc sweep, so its answer is reused briefly.
+_SCAN_TTL_SECONDS = 3.0
+_scan_cache: tuple[float, bool] | None = None
+
+
+def _comm_of(pid: str | int) -> str:
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as stream:
+            return stream.read().strip()
+    except OSError:
+        return ""
+
+
+def any_claude_running() -> bool:
+    """Whether any Claude Code process exists on this machine at all.
+
+    The backstop for sessions with no recorded pid -- entries written before
+    pids were recorded, which would otherwise be trusted for the whole TTL and
+    keep the pet alive forever. Errs towards True: never kill the pet on a
+    failed guess.
+    """
+    global _scan_cache
+    now = time.monotonic()
+    if _scan_cache is not None and now - _scan_cache[0] < _SCAN_TTL_SECONDS:
+        return _scan_cache[1]
+
+    found = True
+    try:
+        found = any(
+            entry.name.isdigit() and _comm_of(entry.name).startswith(CLAUDE_COMM)
+            for entry in os.scandir("/proc")
+        )
+    except OSError:
+        found = True
+    _scan_cache = (now, found)
+    return found
+
+
 def is_alive(session: dict[str, Any], now: float) -> bool:
     """Whether a session should still be counted.
 
@@ -93,19 +134,16 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
         return False
 
     locator = session.get("locator")
-    if not isinstance(locator, dict):
-        return True  # nothing recorded (pre-locator session): trust the TTL
-    pid = locator.get("claude_pid")
+    pid = locator.get("claude_pid") if isinstance(locator, dict) else None
     if not isinstance(pid, int):
-        return True
+        # No pid recorded, which is the case for entries written before pids
+        # were. Falling back to the TTL alone kept the pet alive for six hours
+        # after everything had closed, so ask whether any Claude exists at all.
+        return any_claude_running()
 
-    try:
-        with open(f"/proc/{pid}/comm", encoding="utf-8") as stream:
-            # The comm check guards against the pid being reused by something
-            # unrelated between the session dying and us looking.
-            return stream.read().strip() == "claude"
-    except OSError:
-        return False
+    # The comm check guards against the pid being reused by something unrelated
+    # between the session dying and us looking at it.
+    return _comm_of(pid) == CLAUDE_COMM
 
 
 def _prune(sessions: dict[str, Any], now: float) -> None:
