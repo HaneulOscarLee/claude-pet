@@ -44,7 +44,7 @@ def cmd_list(_args: argparse.Namespace) -> int:
 
     available = config.discover()
     if not available:
-        print("설치된 펫이 없습니다. `claude-pet search` 로 찾고 `claude-pet add <id>` 로 받으세요.")
+        print("No pet packs installed. Browse with `claude-pet search`, install with `claude-pet add <id>`.")
         return 0
     active = config.active_pet_dir()
     for pet_id, directory in available.items():
@@ -57,7 +57,7 @@ def cmd_list(_args: argparse.Namespace) -> int:
                 f"{sum(counts.values())} frames · {len(pet.looks)} looks"
             )
         except sprites.SpriteError as exc:
-            summary = f"불량: {exc}"
+            summary = f"broken: {exc}"
         print(f"{marker} {pet_id:<24} {summary}")
         print(f"    {directory}")
     return 0
@@ -75,9 +75,9 @@ def cmd_search(args: argparse.Namespace) -> int:
         return 1
     pets = result["pets"]
     if not pets:
-        print("결과 없음")
+        print("No results")
         return 0
-    print(f"{result['total']}개 중 {len(pets)}개 표시\n")
+    print(f"showing {len(pets)} of {result['total']}\n")
     for pet in pets:
         version = pet.get("spriteVersionNumber") or 1
         likes = pet.get("likeCount") or 0
@@ -85,7 +85,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         description = (pet.get("description") or "").strip()
         if description:
             print(f"    {description[:96]}")
-    print("\n설치: claude-pet add <id>")
+    print("\nInstall with: claude-pet add <id>")
     return 0
 
 
@@ -110,11 +110,11 @@ def cmd_add(args: argparse.Namespace) -> int:
         try:
             pet = sprites.load_pet(installed["directory"])
         except sprites.SpriteError as exc:
-            print(f"claude-pet: {pet_id} 설치했지만 스프라이트 검증 실패: {exc}", file=sys.stderr)
+            print(f"claude-pet: installed {pet_id}, but its spritesheet will not load: {exc}", file=sys.stderr)
             failures += 1
             continue
         print(
-            f"설치 완료  {pet.id}  ({pet.display_name}, v{pet.version}, "
+            f"installed  {pet.id}  ({pet.display_name}, v{pet.version}, "
             f"{sum(pet.frame_counts.values())} frames) -> {installed['directory']}"
         )
     if not failures and args.pet_ids:
@@ -122,7 +122,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         if not settings.get("pet"):
             settings["pet"] = args.pet_ids[0]
             config.save(settings)
-            print(f"활성 펫으로 지정: {args.pet_ids[0]}")
+            print(f"active pet set to {args.pet_ids[0]}")
     return 1 if failures else 0
 
 
@@ -136,22 +136,22 @@ def cmd_add_collection(args: argparse.Namespace) -> int:
         print(f"claude-pet: {exc}", file=sys.stderr)
         return 1
     for entry in installed:
-        print(f"설치 완료  {entry['id']} -> {entry['directory']}")
-    print(f"{len(installed)}개 설치")
+        print(f"installed  {entry['id']} -> {entry['directory']}")
+    print(f"{len(installed)} installed")
     return 0
 
 
 def cmd_use(args: argparse.Namespace) -> int:
     available = config.discover()
     if args.pet_id not in available:
-        print(f"claude-pet: {args.pet_id} 가 설치되어 있지 않습니다", file=sys.stderr)
+        print(f"claude-pet: {args.pet_id} is not installed", file=sys.stderr)
         return 1
     settings = config.load()
     settings["pet"] = args.pet_id
     config.save(settings)
-    print(f"활성 펫: {args.pet_id}")
+    print(f"active pet: {args.pet_id}")
     if _overlay_pid():
-        print("오버레이 재시작이 필요합니다: claude-pet restart")
+        print("restart the overlay to apply: claude-pet restart")
     return 0
 
 
@@ -161,7 +161,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     available = config.discover()
     directory = available.get(args.pet_id) if args.pet_id else config.active_pet_dir()
     if directory is None:
-        print("claude-pet: 펫을 찾을 수 없습니다", file=sys.stderr)
+        print("claude-pet: no such pet", file=sys.stderr)
         return 1
     pet = sprites.load_pet(directory)
     output = Path(args.output or f"{pet.id}-preview.png").expanduser()
@@ -170,7 +170,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     for name, count in pet.frame_counts.items():
         print(f"  {name:<16} {count} frames")
     print(f"  look-directions  {len(pet.looks)} poses")
-    print(f"\n저장: {output}")
+    print(f"\nwrote {output}")
     return 0
 
 
@@ -202,10 +202,10 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 def cmd_stop(_args: argparse.Namespace) -> int:
     pid = _overlay_pid()
     if pid is None:
-        print("오버레이가 실행 중이 아닙니다")
+        print("overlay is not running")
         return 0
     os.kill(pid, signal.SIGTERM)
-    print(f"종료 신호 전송 (pid {pid})")
+    print(f"sent SIGTERM to pid {pid}")
     return 0
 
 
@@ -223,13 +223,13 @@ def cmd_restart(args: argparse.Namespace) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     snapshot = state.aggregate()
     pid = _overlay_pid()
-    print(f"오버레이     : {'실행 중 (pid %d)' % pid if pid else '정지'}")
-    print(f"집계 상태    : {snapshot['state']}  ({snapshot['sessions']} sessions)")
+    print(f"overlay   : {'running (pid %d)' % pid if pid else 'stopped'}")
+    print(f"state     : {snapshot['state']}  ({snapshot['sessions']} sessions)")
     if snapshot.get("detail"):
-        print(f"상세         : {snapshot['detail']}")
+        print(f"detail    : {snapshot['detail']}")
     settings = config.load()
-    print(f"활성 펫      : {settings.get('pet') or '(자동 선택)'}")
-    print(f"상태 파일    : {state.state_path()}")
+    print(f"active pet: {settings.get('pet') or '(auto)'}")
+    print(f"state file: {state.state_path()}")
 
     data = state.read()
     for session_id, session in data.get("sessions", {}).items():
@@ -240,7 +240,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
 def cmd_set(args: argparse.Namespace) -> int:
     if args.key not in config.DEFAULTS:
         keys = ", ".join(sorted(config.DEFAULTS))
-        print(f"claude-pet: 알 수 없는 키 {args.key!r}. 사용 가능: {keys}", file=sys.stderr)
+        print(f"claude-pet: unknown key {args.key!r}. Available: {keys}", file=sys.stderr)
         return 1
     settings = config.load()
     raw = args.value
@@ -260,7 +260,7 @@ def cmd_set(args: argparse.Namespace) -> int:
     config.save(settings)
     print(f"{args.key} = {value!r}")
     if _overlay_pid():
-        print("적용: claude-pet restart")
+        print("restart to apply: claude-pet restart")
     return 0
 
 
@@ -297,7 +297,7 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
     settings = _read_settings(path)
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
-        print(f"claude-pet: {path} 의 hooks 가 객체가 아닙니다", file=sys.stderr)
+        print(f"claude-pet: hooks in {path} is not an object", file=sys.stderr)
         return 1
 
     command = f"{launcher_path()} hook"
@@ -305,7 +305,7 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
     for event in HOOK_EVENTS:
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
-            print(f"claude-pet: hooks.{event} 가 배열이 아닙니다 — 건너뜀", file=sys.stderr)
+            print(f"claude-pet: hooks.{event} is not an array, skipping", file=sys.stderr)
             continue
         if any(_entry_is_ours(entry) for entry in entries):
             continue
@@ -314,9 +314,9 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"{path}: {added}개 이벤트에 hook 추가 (기존 hook은 보존)")
+    print(f"{path}: added hooks for {added} event(s); existing hooks untouched")
     if added:
-        print("새 Claude Code 세션을 시작하면 펫이 상태를 따라갑니다.")
+        print("Start a new Claude Code session and the pet will follow along.")
     return 0
 
 
@@ -325,7 +325,7 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
     settings = _read_settings(path)
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
-        print(f"{path}: 제거할 hook 없음")
+        print(f"{path}: nothing to remove")
         return 0
 
     removed = 0
@@ -345,7 +345,7 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
             hooks.pop(event)
 
     path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"{path}: {removed}개 hook 제거")
+    print(f"{path}: removed {removed} hook(s)")
     return 0
 
 
@@ -363,16 +363,16 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         if not ok:
             problems += 1
 
-    print("환경")
+    print("environment")
     session = os.environ.get("XDG_SESSION_TYPE", "?")
     display = os.environ.get("DISPLAY", "")
-    check("DISPLAY (X11/XWayland)", bool(display), display or "미설정 — 오버레이가 뜨지 않습니다")
-    print(f"  INFO  세션 타입: {session}" + (" (XWayland 경유)" if session == "wayland" else ""))
+    check("DISPLAY (X11/XWayland)", bool(display), display or "unset: the overlay cannot start")
+    print(f"  INFO  session type: {session}" + (" (via XWayland)" if session == "wayland" else ""))
 
     try:
         from PIL import features
 
-        check("Pillow WebP 디코딩", bool(features.check("webp")))
+        check("Pillow WebP decoding", bool(features.check("webp")))
     except ImportError:
         check("Pillow", False, "pip install Pillow")
 
@@ -388,11 +388,11 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     from shutil import which
 
-    check("notify-send", which("notify-send") is not None, "libnotify-bin 없으면 알림 생략")
+    check("notify-send", which("notify-send") is not None, "without libnotify-bin, notifications are skipped")
 
-    print("\n펫")
+    print("\npets")
     available = config.discover()
-    check("설치된 팩", bool(available), f"{len(available)}개" if available else "claude-pet add <id>")
+    check("installed packs", bool(available), f"{len(available)} found" if available else "claude-pet add <id>")
     for pet_id, directory in available.items():
         try:
             pet = sprites.load_pet(directory)
@@ -401,7 +401,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             print(f"  FAIL  {pet_id} — {exc}")
             problems += 1
 
-    print("\n연동")
+    print("\nintegration")
     settings_path = config.claude_home() / "settings.json"
     settings = _read_settings(settings_path)
     installed_events = [
@@ -410,13 +410,13 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         if isinstance(entries, list) and any(_entry_is_ours(entry) for entry in entries)
     ]
     check(
-        "hook 설치",
+        "hooks installed",
         len(installed_events) >= len(HOOK_EVENTS),
         f"{len(installed_events)}/{len(HOOK_EVENTS)} — claude-pet install-hooks",
     )
     pid = _overlay_pid()
-    print(f"  INFO  오버레이: {'pid %d' % pid if pid else '정지'}")
-    print(f"\n{'문제 없음' if not problems else f'{problems}건 확인 필요'}")
+    print(f"  INFO  overlay: {'pid %d' % pid if pid else 'stopped'}")
+    print(f"\n{'all good' if not problems else f'{problems} item(s) need attention'}")
     return 1 if problems else 0
 
 
@@ -426,71 +426,71 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="claude-pet",
-        description="Codex 펫 스프라이트로 동작하는 Claude Code 데스크톱 펫",
+        description="A desktop pet for Claude Code, rendered from Codex pet sprite packs",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("list", help="설치된 펫 나열").set_defaults(func=cmd_list)
+    subparsers.add_parser("list", help="list installed pet packs").set_defaults(func=cmd_list)
 
-    search = subparsers.add_parser("search", help="codex-pets.net 갤러리 검색")
+    search = subparsers.add_parser("search", help="browse the codex-pets.net gallery")
     search.add_argument("query", nargs="?", default="")
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--sort", default="popular", choices=["new", "popular", "likes", "random"])
     search.add_argument("--version", choices=["1", "2"])
     search.set_defaults(func=cmd_search)
 
-    add = subparsers.add_parser("add", help="codex-pets.net 에서 펫 설치")
+    add = subparsers.add_parser("add", help="install packs from codex-pets.net")
     add.add_argument("pet_ids", nargs="+", metavar="PET_ID")
-    add.add_argument("--codex-home", action="store_true", help="~/.codex/pets 에 설치")
+    add.add_argument("--codex-home", action="store_true", help="install into ~/.codex/pets instead")
     add.set_defaults(func=cmd_add)
 
-    collection = subparsers.add_parser("add-collection", help="컬렉션 전체 설치")
+    collection = subparsers.add_parser("add-collection", help="install every pack in a collection")
     collection.add_argument("slug")
     collection.add_argument("--codex-home", action="store_true")
     collection.set_defaults(func=cmd_add_collection)
 
-    use = subparsers.add_parser("use", help="활성 펫 지정")
+    use = subparsers.add_parser("use", help="choose the active pack")
     use.add_argument("pet_id")
     use.set_defaults(func=cmd_use)
 
-    preview = subparsers.add_parser("preview", help="스프라이트 시트를 PNG로 덤프")
+    preview = subparsers.add_parser("preview", help="dump every animation row to a PNG")
     preview.add_argument("pet_id", nargs="?")
     preview.add_argument("-o", "--output")
     preview.set_defaults(func=cmd_preview)
 
-    run = subparsers.add_parser("run", help="오버레이 실행")
-    run.add_argument("--pet", help="이번 실행에만 사용할 펫 id")
+    run = subparsers.add_parser("run", help="start the overlay")
+    run.add_argument("--pet", help="pack id to use for this run only")
     run.set_defaults(func=cmd_run)
 
-    restart = subparsers.add_parser("restart", help="오버레이 재시작")
+    restart = subparsers.add_parser("restart", help="restart the overlay")
     restart.add_argument("--pet")
     restart.set_defaults(func=cmd_restart)
 
-    snapshot = subparsers.add_parser("snapshot", help="오버레이 창을 PNG로 캡처 (디버그)")
+    snapshot = subparsers.add_parser("snapshot", help="capture the overlay window to a PNG (debug)")
     snapshot.add_argument("output")
     snapshot.add_argument("--pet")
     snapshot.add_argument("--state", choices=list(state.PRIORITY))
     snapshot.add_argument("--detail", default="")
     snapshot.set_defaults(func=cmd_snapshot)
 
-    subparsers.add_parser("stop", help="오버레이 종료").set_defaults(func=cmd_stop)
-    subparsers.add_parser("status", help="현재 상태 표시").set_defaults(func=cmd_status)
-    subparsers.add_parser("doctor", help="환경 점검").set_defaults(func=cmd_doctor)
+    subparsers.add_parser("stop", help="stop the overlay").set_defaults(func=cmd_stop)
+    subparsers.add_parser("status", help="show the current state and live sessions").set_defaults(func=cmd_status)
+    subparsers.add_parser("doctor", help="check the environment and integration").set_defaults(func=cmd_doctor)
 
-    setter = subparsers.add_parser("set", help="설정 변경")
+    setter = subparsers.add_parser("set", help="change a setting")
     setter.add_argument("key")
     setter.add_argument("value")
     setter.set_defaults(func=cmd_set)
 
-    install = subparsers.add_parser("install-hooks", help="Claude Code settings.json 에 hook 추가")
-    install.add_argument("--project", action="store_true", help="전역 대신 ./.claude/settings.json")
+    install = subparsers.add_parser("install-hooks", help="add hooks to Claude Code settings.json")
+    install.add_argument("--project", action="store_true", help="use ./.claude/settings.json instead of the global one")
     install.set_defaults(func=cmd_install_hooks)
 
-    uninstall = subparsers.add_parser("uninstall-hooks", help="hook 제거")
+    uninstall = subparsers.add_parser("uninstall-hooks", help="remove the hooks again")
     uninstall.add_argument("--project", action="store_true")
     uninstall.set_defaults(func=cmd_uninstall_hooks)
 
-    hook = subparsers.add_parser("hook", help="(내부) hook 이벤트 처리")
+    hook = subparsers.add_parser("hook", help="(internal) handle a hook event")
     hook.add_argument("event", nargs="?")
     hook.set_defaults(func=cmd_hook)
 

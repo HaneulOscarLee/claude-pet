@@ -16,6 +16,7 @@ DEFAULTS: dict[str, Any] = {
     # Off by default: the speech bubble is the intended channel, and a
     # desktop notification on top of it is just the same news twice.
     "notifications": False,
+    "language": "auto",   # bubble label language: auto (locale) | en | ko
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "autostart": True,    # let the SessionStart hook launch the overlay
     "position": None,     # [x, y] once the user drags the pet somewhere

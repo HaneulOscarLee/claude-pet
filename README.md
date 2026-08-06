@@ -1,131 +1,303 @@
 # claude-pet
 
-A floating desktop pet for Claude Code, driven by Claude's live session state
-and rendered from **codex-pets.net sprite packs** — the same packs the Codex
-desktop app uses.
+**A desktop pet for [Claude Code](https://claude.com/claude-code), on Linux.**
 
-Codex ships pets for its own app on macOS and Windows only. This is the same
-idea for Claude Code on Linux: an always-on-top sprite that reacts to whether
-Claude is working, blocked on you, done, or failed, so you can tell without
-looking at the terminal.
+An always-on-top sprite sits on your desktop and reacts to what Claude Code is
+actually doing — working, blocked on you, finished, or failed — so you can tell
+at a glance without switching to the terminal.
 
-```
-  ┌──────────────────────────────┐
-  │ 입력 대기 · Bash 실행 권한... │   <- speech bubble, colour-coded by state
-  └──────────────────────────────┘
-              (\_/)                  <- your sprite pack, animated
-```
+It renders **sprite packs from [codex-pets.net](https://codex-pets.net/)**, so
+all ~3000 community packs made for the Codex desktop app work here unchanged.
+
+![claude-pet showing running, waiting, review and idle states](docs/demo.png)
+
+## Why this exists
+
+OpenAI shipped pets for the **Codex** desktop app, on **macOS and Windows
+only**. There is no Linux build, and nothing equivalent for Claude Code.
+
+claude-pet is the same idea pointed at a different agent and a different OS:
+
+|  | Codex pets | claude-pet |
+|---|---|---|
+| Agent | Codex | **Claude Code** |
+| Platform | macOS, Windows | **Linux** (X11 / Wayland via XWayland) |
+| Sprite packs | codex-pets.net | **the same packs, unchanged** |
+
+Built and tested on **Ubuntu 24.04** (GNOME 46, Wayland session). Nothing in it
+is Ubuntu-specific beyond the dependency names.
 
 ## Requirements
 
-- Linux with X11 or a Wayland session that has XWayland (GNOME is fine)
-- Python 3.10+, `python3-gi` (PyGObject/GTK3), `python3-pil` with WebP support
+- Linux with X11, or a Wayland session with XWayland (GNOME, KDE — both fine)
+- Python 3.10+
+- PyGObject / GTK 3, and Pillow with WebP support
 
-Run `./claude-pet doctor` to check all of it at once.
+On Ubuntu or Debian:
 
-Wayland note: the overlay deliberately runs through XWayland. `_NET_WM_STATE_ABOVE`
-is the only always-on-top mechanism mutter honours for a normal client, so the
-launcher exports `GDK_BACKEND=x11`.
+```bash
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil libnotify-bin
+```
+
+`libnotify-bin` is optional — only needed if you turn desktop notifications on.
+
+> **Why XWayland?** `_NET_WM_STATE_ABOVE` is the only always-on-top mechanism
+> mutter honours for an ordinary client, and `gtk-layer-shell` is wlroots-only.
+> So the launcher exports `GDK_BACKEND=x11` and the window goes through
+> XWayland even in a Wayland session. You do not have to configure anything.
+
+## Install
+
+```bash
+git clone https://github.com/YOUR_GITHUB_USER/claude-pet.git
+cd claude-pet
+./claude-pet doctor          # confirm the environment is ready
+```
+
+There is nothing to build and no virtualenv to create. Optionally put it on
+your `PATH`:
+
+```bash
+ln -s "$PWD/claude-pet" ~/.local/bin/claude-pet
+```
 
 ## Quick start
 
 ```bash
-./claude-pet search                 # browse the codex-pets.net gallery
-./claude-pet add clawd              # install a pack
-./claude-pet install-hooks          # wire it into ~/.claude/settings.json
-./claude-pet run                    # start the overlay (hooks can autostart it)
+claude-pet search                # browse the gallery
+claude-pet add clawd             # install a pack
+claude-pet install-hooks         # wire into ~/.claude/settings.json
+claude-pet run                   # start the overlay
 ```
 
-Start a new Claude Code session and the pet follows along.
+Then start a new Claude Code session. That is it — the pet follows along.
 
-## Sprite compatibility
+After `install-hooks`, the `SessionStart` hook also **starts the overlay for
+you**, so in day-to-day use you never run `claude-pet run` by hand. Disable
+that with `claude-pet set autostart false`.
 
-Any pack from [codex-pets.net](https://codex-pets.net/) works, both atlas
-versions, and packs already installed with `npx codex-pets add` are picked up
-from `~/.codex/pets/` without being copied.
+## What the pet shows
 
-| | v1 | v2 |
+| Claude Code hook | State | Bubble reads |
 |---|---|---|
-| atlas | 1536×1872 | 1536×2288 |
-| grid | 8 cols × 9 rows | 8 cols × 11 rows |
-| cell | 192×208 | 192×208 |
-| `pet.json` | no version field | `"spriteVersionNumber": 2` |
+| `SessionStart` | `waving` | session started |
+| `UserPromptSubmit` | `running` | working |
+| `PreToolUse` / `PostToolUse` | `running` | working · *tool name* |
+| `PostToolUse` reporting an error | `failed` | failed |
+| `Notification` | `waiting` | needs you · *Claude's own message* |
+| `Stop` | `review` | done |
+| `SubagentStop` | `running` | working · subagent finished |
+| `SessionEnd` | — | the session is forgotten |
 
-Animation rows, in order: `idle`, `running-right`, `running-left`, `waving`,
-`jumping`, `failed`, `waiting`, `running`, `review`. v2 adds rows 9–10, which
-hold 16 look-direction poses — used to make the pet face your mouse while idle.
+Several Claude sessions at once collapse into the most urgent state:
 
-Frame counts per row are measured from the alpha channel rather than assumed,
-because real packs sometimes draw an extra frame past the documented count.
+```
+waiting  >  failed  >  review  >  running  >  waving  >  idle
+```
 
-Search order for packs: `~/.claude/pets/`, then `~/.codex/pets/`
-(`$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` respected).
+So a pet reading **needs you** means *some* session wants your attention, the
+bubble names which message, and the bubble shows `(N sessions)` when more than
+one is live.
 
-## State mapping
+Bubble labels ship in English and Korean: `claude-pet set language ko`
+(`auto`, the default, follows your locale).
 
-| Claude Code hook | Pet state | Bubble |
+Desktop notifications are **off** by default — the bubble is the channel, and
+a notification on top of it is the same news twice. Turn them on with
+`claude-pet set notifications true` or from the right-click menu.
+
+## Usage
+
+```
+claude-pet <command> [options]
+```
+
+### Pets
+
+```bash
+claude-pet search                       # most popular packs
+claude-pet search penguin --limit 5     # search by text
+claude-pet search --version 2           # only v2 packs (these have mouse-look)
+claude-pet search --sort new
+
+claude-pet add clawd                    # install one
+claude-pet add clawd tennis-ball dario  # or several
+claude-pet add-collection cats          # a whole curated collection
+claude-pet add guga --codex-home        # install into ~/.codex/pets instead
+
+claude-pet list                          # what is installed
+claude-pet use tennis-ball               # pick the active pack
+claude-pet preview tennis-ball           # dump all animation rows to a PNG
+```
+
+```console
+$ claude-pet list
+* clawd                    v1 · 192x208 · 57 frames · 0 looks
+    /home/you/.claude/pets/clawd
+  tennis-ball              v2 · 192x208 · 58 frames · 16 looks
+    /home/you/.claude/pets/tennis-ball
+```
+
+### Overlay
+
+```bash
+claude-pet run                  # start it
+claude-pet run --pet dario      # start with a specific pack, just this once
+claude-pet restart              # after changing the pack or settings
+claude-pet stop
+claude-pet status               # current state and every live session
+```
+
+```console
+$ claude-pet status
+overlay   : running (pid 3877683)
+state     : running  (1 sessions)
+detail    : Bash
+active pet: clawd
+state file: /home/you/.local/state/claude-pet/state.json
+  ed0f2f9c  running  Bash
+```
+
+### Integration
+
+```bash
+claude-pet install-hooks              # ~/.claude/settings.json (global)
+claude-pet install-hooks --project    # ./.claude/settings.json (this repo only)
+claude-pet uninstall-hooks
+claude-pet doctor                     # environment + integration check
+```
+
+`install-hooks` **merges** into your existing settings: it never touches hooks
+it did not write, and re-running it adds nothing. `uninstall-hooks` removes
+only its own entries.
+
+### Settings
+
+```bash
+claude-pet set height 160             # sprite height in pixels
+claude-pet set anchor bottom-left     # bottom-right | bottom-left | top-right | top-left
+claude-pet set walk false             # stop wandering
+claude-pet set language ko
+claude-pet set position none          # forget a dragged position, re-anchor
+```
+
+| Key | Default | Meaning |
 |---|---|---|
-| `SessionStart` | `waving` | 세션 시작 |
-| `UserPromptSubmit` | `running` | 작업 중 |
-| `PreToolUse` / `PostToolUse` | `running` | 작업 중 · *tool name* |
-| `PostToolUse` with an error | `failed` | 실패 |
-| `Notification` | `waiting` | 입력 대기 · *Claude's message* |
-| `Stop` | `review` | 응답 완료 |
-| `SubagentStop` | `running` | 서브에이전트 완료 |
-| `SessionEnd` | — | session forgotten |
+| `pet` | first found | active pack id |
+| `height` | `132` | on-screen sprite height in pixels |
+| `anchor` | `bottom-right` | corner to start in |
+| `walk` | `true` | wander along the screen edge while idle |
+| `language` | `auto` | bubble labels: `auto` \| `en` \| `ko` |
+| `notifications` | `false` | also send a desktop notification |
+| `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
+| `autostart` | `true` | let the `SessionStart` hook launch the overlay |
+| `position` | `null` | remembered drag position |
 
-Multiple sessions collapse to the most urgent state, in this order:
-`waiting` → `failed` → `review` → `running` → `waving` → `idle`. So a pet
-showing 입력 대기 means *some* session wants you, and the bubble names it.
+Stored in `~/.config/claude-pet/config.json`.
 
-Desktop notifications are **off** by default — the bubble is the channel. Turn
-them on with `./claude-pet set notifications true` or the right-click menu.
+### Debugging
+
+```bash
+claude-pet snapshot out.png                          # capture the live overlay
+claude-pet snapshot out.png --state waiting \
+    --detail "needs permission"                      # capture a forced state
+```
+
+Useful because GNOME blocks its screenshot D-Bus API for unauthorised callers,
+so this is how you get a picture of the window.
 
 ## Interaction
 
-- **drag** — move the pet; the position is remembered
-- **double-click** — pin/unpin the bubble
-- **right-click** — switch pack, toggle wandering, toggle notifications, quit
-- clicks land only on the sprite; the rest of the window is click-through
+| Action | Result |
+|---|---|
+| drag | move the pet; the position is remembered |
+| double-click | pin / unpin the speech bubble |
+| right-click | switch pack, toggle wandering and notifications, quit |
 
-## Commands
+Clicks land only on the sprite itself — the rest of the window is
+click-through, so the pet never steals a click meant for what is underneath.
+
+## Sprite packs
+
+Any pack from [codex-pets.net](https://codex-pets.net/) works, in either atlas
+format. Packs you already installed with `npx codex-pets add` are picked up
+from `~/.codex/pets/` directly, without being copied.
+
+Search order: `~/.claude/pets/`, then `~/.codex/pets/`
+(`$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` are respected).
+
+### The format
+
+|  | v1 | v2 |
+|---|---|---|
+| atlas | 1536 × 1872 | 1536 × 2288 |
+| grid | 8 columns × 9 rows | 8 columns × 11 rows |
+| cell | 192 × 208 | 192 × 208 |
+| `pet.json` | no version field | `"spriteVersionNumber": 2` |
+
+Animation rows, in order:
+
+| Row | Animation | Row | Animation |
+|---|---|---|---|
+| 0 | `idle` | 5 | `failed` |
+| 1 | `running-right` | 6 | `waiting` |
+| 2 | `running-left` | 7 | `running` |
+| 3 | `waving` | 8 | `review` |
+| 4 | `jumping` | 9–10 | 16 look directions (v2 only) |
+
+The v2 look-direction rows are a left-to-right yaw sweep, used to make the pet
+face your mouse pointer while idle.
+
+Frame counts per row are **measured from the alpha channel** rather than read
+from the published table — real packs sometimes draw a frame past the nominal
+count, and trailing cells are required to be fully transparent anyway.
+
+### Rolling your own
+
+A pack is just a directory:
 
 ```
-list                     installed packs, with format and frame counts
-search [QUERY]           browse the gallery (--sort, --version, --limit)
-add PET_ID...            install packs (--codex-home to install to ~/.codex/pets)
-add-collection SLUG      install a whole collection
-use PET_ID               choose the active pack
-preview [PET_ID]         dump every animation row to a PNG to eyeball a pack
-run / restart / stop     control the overlay
-status                   current aggregate state and live sessions
-set KEY VALUE            pet, height, anchor, walk, notifications,
-                         look_at_mouse, autostart, position
-snapshot OUT.png         capture the overlay window (--state, --detail)
-install-hooks            add hooks to ~/.claude/settings.json (--project for repo-local)
-uninstall-hooks          remove them again
-doctor                   environment and integration check
+my-pet/
+  pet.json
+  spritesheet.webp
 ```
 
-`install-hooks` merges into existing settings and is idempotent — it never
-touches hooks it did not write, and re-running adds nothing.
+```json
+{
+  "id": "my-pet",
+  "displayName": "My Pet",
+  "description": "A pet I drew",
+  "spritesheetPath": "spritesheet.webp",
+  "spriteVersionNumber": 2,
+  "kind": "animal"
+}
+```
+
+Drop it in `~/.claude/pets/my-pet/` and check it loaded:
+
+```bash
+claude-pet list
+claude-pet preview my-pet -o check.png    # eyeball every row and frame count
+```
+
+`preview` prints the frame count it detected per row, which is the fastest way
+to catch a misaligned grid.
 
 ## How it works
 
-The hooks and the window share a small JSON file at
-`~/.local/state/claude-pet/state.json`, written atomically. The hook bridge is
-stdlib-only and always exits 0, so a broken pet can never break a Claude turn —
-it costs about 33 ms per tool call.
-
 ```
-Claude Code hook ──> claude-pet hook ──> state.json ──> overlay (polls, 250ms)
+Claude Code hook ──> claude-pet hook ──> state.json ──> overlay (polls, 250 ms)
 ```
 
-## Layout
+The hooks and the window share one small JSON file at
+`~/.local/state/claude-pet/state.json`, written atomically with a lock that has
+a hard timeout. The hook bridge is stdlib-only — no Pillow, no GTK, no network
+— and always exits 0, so a broken pet can never break a Claude turn. It costs
+about **33 ms** per tool call.
 
 | File | Role |
 |---|---|
-| `claude_pet/sprites.py` | atlas parsing, v1/v2 layout detection, frame slicing |
+| `claude_pet/sprites.py` | atlas parsing, v1/v2 detection, frame slicing |
 | `claude_pet/state.py` | shared state file, multi-session aggregation |
 | `claude_pet/hook.py` | hook event → pet state, overlay autostart |
 | `claude_pet/overlay.py` | GTK3 window, animation, bubble, walking, mouse-look |
@@ -133,9 +305,54 @@ Claude Code hook ──> claude-pet hook ──> state.json ──> overlay (pol
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |
 
+## Troubleshooting
+
+Start with `claude-pet doctor` — it checks every item below at once.
+
+**No pet appears.** Check `DISPLAY` is set. In a Wayland session the overlay
+needs XWayland; `doctor` reports which backend it will use. Look at
+`~/.local/state/claude-pet/overlay.log` for a traceback.
+
+**The pet is not on top.** Confirm the window has the right state:
+
+```bash
+xprop -name claude-pet _NET_WM_STATE     # expect _NET_WM_STATE_ABOVE
+```
+
+Some tiling window managers ignore `_NET_WM_STATE_ABOVE`; there is no
+workaround from the client side.
+
+**The pet never changes state.** Hooks are per-settings-file, and a running
+session does not pick up newly installed hooks. Run `claude-pet install-hooks`,
+then start a *new* session. `claude-pet status` shows whether events are
+arriving at all.
+
+**The pet never wanders.** Wandering only happens while `idle`. If a Claude
+session is mid-turn the state is `running`, which is correct.
+
+**A pack shows as `broken` in `list`.** The message names the reason. The usual
+cause is an atlas that is not 8 columns wide or whose height is not divisible
+by 9 or 11.
+
+## Uninstall
+
+```bash
+claude-pet stop
+claude-pet uninstall-hooks
+rm -rf ~/.config/claude-pet ~/.local/state/claude-pet ~/.claude/pets
+```
+
 ## Credits
 
 Sprite packs and the pack format come from the community gallery at
-[codex-pets.net](https://codex-pets.net/) (`portons/codex-pet-share`); the
-format is documented in `gennadi-kuzmin/awesome-codex-pets`. Neither this tool
-nor those projects are affiliated with OpenAI or Anthropic.
+[codex-pets.net](https://codex-pets.net/)
+([`portons/codex-pet-share`](https://github.com/portons/codex-pet-share)); the
+format is documented in
+[`gennadi-kuzmin/awesome-codex-pets`](https://github.com/gennadi-kuzmin/awesome-codex-pets).
+
+Neither this project nor those is affiliated with, endorsed by, or supported by
+OpenAI or Anthropic.
+
+## License
+
+[MIT](LICENSE)

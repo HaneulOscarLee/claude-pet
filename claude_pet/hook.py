@@ -43,9 +43,9 @@ def _detail(event: str, payload: dict[str, Any]) -> str:
         # The only place Claude gives us real prose worth surfacing.
         return str(payload.get("message") or "")
     if event == "SubagentStop":
-        return "서브에이전트 완료"
+        return "subagent finished"
     if event in {"PreCompact", "PostCompact"}:
-        return "컨텍스트 압축"
+        return "compacting context"
     return ""
 
 

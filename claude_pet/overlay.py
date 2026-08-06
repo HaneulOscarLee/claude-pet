@@ -47,14 +47,42 @@ ONE_SHOT = {"waving", "jumping"}
 #: Frames per second per state -- working should read as busier than idle.
 STATE_FPS = {"idle": 6, "waiting": 8, "review": 8, "running": 12, "failed": 8, "waving": 10}
 
-LABELS = {
-    "idle": "대기 중",
-    "running": "작업 중",
-    "waiting": "입력 대기",
-    "review": "응답 완료",
-    "failed": "실패",
-    "waving": "세션 시작",
+#: Bubble state labels. `language: auto` picks by locale and falls back to en.
+LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "idle": "idle",
+        "running": "working",
+        "waiting": "needs you",
+        "review": "done",
+        "failed": "failed",
+        "waving": "session started",
+        "menu.walk": "Wander around",
+        "menu.notify": "Desktop notifications",
+        "menu.quit": "Quit",
+    },
+    "ko": {
+        "idle": "대기 중",
+        "running": "작업 중",
+        "waiting": "입력 대기",
+        "review": "응답 완료",
+        "failed": "실패",
+        "waving": "세션 시작",
+        "menu.walk": "돌아다니기",
+        "menu.notify": "데스크톱 알림",
+        "menu.quit": "종료",
+    },
 }
+
+
+def resolve_labels(language: str) -> dict[str, str]:
+    if language in LABELS:
+        return LABELS[language]
+    if language == "auto":
+        for variable in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            value = os.environ.get(variable, "")
+            if value:
+                return LABELS.get(value.split("_")[0].lower(), LABELS["en"])
+    return LABELS["en"]
 
 NOTIFY_ON = {"waiting", "review", "failed"}
 
@@ -100,6 +128,7 @@ class Overlay(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.view = view
         self.settings = settings
+        self.labels = resolve_labels(str(settings.get("language") or "auto"))
 
         self.state = "idle"
         self.detail = ""
@@ -259,7 +288,7 @@ class Overlay(Gtk.Window):
         return len(frames) / max(1, STATE_FPS.get(name, 10))
 
     def _notify(self, name: str) -> None:
-        summary = f"Claude Code · {LABELS.get(name, name)}"
+        summary = f"Claude Code · {self.labels.get(name, name)}"
         body = self.detail or ""
         urgency = "critical" if name == "waiting" else "normal"
         try:
@@ -370,7 +399,7 @@ class Overlay(Gtk.Window):
         return self.bubble_pinned or time.monotonic() < self.bubble_until
 
     def _bubble_text(self) -> str:
-        label = LABELS.get(self.state, self.state)
+        label = self.labels.get(self.state, self.state)
         parts = [label]
         if self.detail:
             parts.append(self.detail)
@@ -474,18 +503,18 @@ class Overlay(Gtk.Window):
             menu.append(item)
 
         menu.append(Gtk.SeparatorMenuItem())
-        walk = Gtk.CheckMenuItem(label="돌아다니기")
+        walk = Gtk.CheckMenuItem(label=self.labels["menu.walk"])
         walk.set_active(bool(self.settings.get("walk", True)))
         walk.connect("toggled", self._on_toggle, "walk")
         menu.append(walk)
 
-        notify = Gtk.CheckMenuItem(label="알림 보내기")
-        notify.set_active(bool(self.settings.get("notifications", True)))
+        notify = Gtk.CheckMenuItem(label=self.labels["menu.notify"])
+        notify.set_active(bool(self.settings.get("notifications", False)))
         notify.connect("toggled", self._on_toggle, "notifications")
         menu.append(notify)
 
         menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label="종료")
+        quit_item = Gtk.MenuItem(label=self.labels["menu.quit"])
         quit_item.connect("activate", lambda *_: self.quit())
         menu.append(quit_item)
 
