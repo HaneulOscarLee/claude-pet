@@ -5,6 +5,7 @@ Plain stdlib, no test runner needed:
     python3 tests/test_aggregate.py
 """
 
+import contextlib
 import os
 import sys
 import time
@@ -15,6 +16,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from claude_pet import state  # noqa: E402
 
 NOW = time.time()
+
+
+@contextlib.contextmanager
+def claude_running(answer: bool):
+    """Pin the "is any Claude running" answer.
+
+    Fixtures below carry no recorded pid, so without this they would depend on
+    whether a Claude process happens to exist -- which passes on a developer's
+    machine and fails in CI.
+    """
+    original = state.any_claude_running
+    state.any_claude_running = lambda: answer
+    try:
+        yield
+    finally:
+        state.any_claude_running = original
 
 
 def session(name: str, age_seconds: float) -> dict:
@@ -79,49 +96,58 @@ def liveness_checks() -> list[tuple[str, bool]]:
     # pet alive for the whole TTL after everything had closed.
     no_locator = {"state": "running", "ts": NOW}
     empty_locator = {"state": "running", "ts": NOW, "locator": {}}
-    original = state.any_claude_running
-    try:
-        state.any_claude_running = lambda: True
+    with claude_running(True):
         results.append(("no pid + Claude running -> live", state.is_alive(no_locator, NOW)))
-        results.append(("empty locator + Claude running -> live", state.is_alive(empty_locator, NOW)))
-        state.any_claude_running = lambda: False
+        results.append(
+            ("empty locator + Claude running -> live", state.is_alive(empty_locator, NOW))
+        )
+        mixed = {"sessions": {"dead": gone, "live": session("waiting", 1)}}
+        aggregated = state.aggregate(mixed)
+        results.append(("live session survives a dead one", aggregated["state"] == "waiting"))
+        results.append(("only live sessions counted", aggregated["sessions"] == 1))
+
+    with claude_running(False):
         results.append(("no pid + no Claude -> dead", not state.is_alive(no_locator, NOW)))
         results.append(
-            ("no pid + no Claude aggregates to idle",
-             state.aggregate({"sessions": {"a": no_locator}})["state"] == "idle")
+            (
+                "no pid + no Claude aggregates to idle",
+                state.aggregate({"sessions": {"a": no_locator}})["state"] == "idle",
+            )
         )
-    finally:
-        state.any_claude_running = original
 
-    # The real sweep must find this very session's Claude process.
-    results.append(("any_claude_running finds a live Claude", state.any_claude_running()))
-
-    mixed = {"sessions": {"dead": gone, "live": session("waiting", 1)}}
-    aggregated = state.aggregate(mixed)
-    results.append(("live session survives a dead one", aggregated["state"] == "waiting"))
-    results.append(("only live sessions counted", aggregated["sessions"] == 1))
+    # The real sweep must answer without raising. Whether it finds anything
+    # depends on the machine, so that is deliberately not asserted.
+    results.append(("real sweep returns a bool", isinstance(state.any_claude_running(), bool)))
     return results
 
 
 def main() -> int:
     failures = 0
-    for label, sessions, expected in CASES:
-        result = state.aggregate({"sessions": sessions})
-        ok = result["state"] == expected
+    # These cases are about dwells and priority, not liveness, so the liveness
+    # answer is pinned rather than left to whatever the machine is running.
+    with claude_running(True):
+        for label, sessions, expected in CASES:
+            result = state.aggregate({"sessions": sessions})
+            ok = result["state"] == expected
+            failures += not ok
+            print(
+                f"  {'PASS' if ok else 'FAIL'}  {label:<28} -> "
+                f"{result['state']} (expected {expected})"
+            )
+
+        # A session past its dwell has nothing left to say.
+        stale = state.aggregate({"sessions": {"a": session("review", 25)}})
+        ok = stale["detail"] == ""
         failures += not ok
-        print(f"  {'PASS' if ok else 'FAIL'}  {label:<28} -> {result['state']} (expected {expected})")
+        print(f"  {'PASS' if ok else 'FAIL'}  expired session drops detail  -> {stale['detail']!r}")
 
-    # A session past its dwell has nothing left to say.
-    stale = state.aggregate({"sessions": {"a": session("review", 25)}})
-    ok = stale["detail"] == ""
-    failures += not ok
-    print(f"  {'PASS' if ok else 'FAIL'}  expired session drops detail  -> {stale['detail']!r}")
-
-    # Live-session count is independent of dwells.
-    counted = state.aggregate({"sessions": {"a": session("review", 25), "b": session("running", 1)}})
-    ok = counted["sessions"] == 2
-    failures += not ok
-    print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
+        # Live-session count is independent of dwells.
+        counted = state.aggregate(
+            {"sessions": {"a": session("review", 25), "b": session("running", 1)}}
+        )
+        ok = counted["sessions"] == 2
+        failures += not ok
+        print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
 
     live_results = liveness_checks()
     for name, ok in live_results:
