@@ -159,6 +159,16 @@ DRAG_THRESHOLD = 5
 #: click on something else.
 MENU_GRAB_GUARD_SECONDS = 0.3
 
+#: Set CLAUDE_PET_DEBUG=1 to trace menu dismissal decisions. The signals here
+#: differ between X11 and Wayland surfaces and cannot be reasoned about from the
+#: outside, so this stays available rather than being guesswork each time.
+DEBUG = bool(os.environ.get("CLAUDE_PET_DEBUG"))
+
+
+def trace(message: str) -> None:
+    if DEBUG:
+        print(f"[claude-pet] {message}", flush=True)
+
 
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
     data = GLib.Bytes.new(image.tobytes())
@@ -757,17 +767,45 @@ class Overlay(Gtk.Window):
         # while another window is presented, because it holds a keyboard grab.
         self.menu_opened_at = time.monotonic()
         menu.connect("grab-broken-event", self._on_menu_grab_broken, menu)
+        menu.connect("unmap", lambda *_: trace("menu unmapped"))
+        trace("menu popped")
 
     def _on_menu_grab_broken(self, _menu, event, menu) -> bool:
+        age = time.monotonic() - self.menu_opened_at
+        pointer = Gdk.Display.get_default().get_default_seat().get_pointer()
+        position = pointer.get_position()[1:] if pointer else ("?", "?")
+        trace(
+            f"grab-broken implicit={getattr(event, 'implicit', None)} "
+            f"age={age:.2f}s pointer={position}"
+        )
+
         # Popping the menu replaces the implicit grab taken by the right-click
         # that opened it. Treating that as somebody else taking over shut the
         # menu the instant it appeared.
         if getattr(event, "implicit", False):
+            trace("  ignored: implicit grab replacement")
             return False
-        if time.monotonic() - self.menu_opened_at < MENU_GRAB_GUARD_SECONDS:
+        if age < MENU_GRAB_GUARD_SECONDS:
+            trace("  ignored: within the open guard")
             return False
-        menu.popdown()
+        self._dismiss(menu)
         return False
+
+    def _dismiss(self, menu) -> None:
+        """Close the menu, belt and braces.
+
+        `popdown()` alone was observed to leave the menu on screen when the grab
+        was taken by a Wayland surface -- the handler ran and nothing unmapped.
+        `deactivate()` is the documented way to unwind a menu shell, and hide()
+        is the blunt instrument if both are somehow ignored.
+        """
+        trace("  closing the menu")
+        menu.deactivate()
+        menu.popdown()
+        if menu.get_mapped():
+            trace("  still mapped after deactivate+popdown; hiding")
+            menu.hide()
+        trace(f"  mapped after close: {menu.get_mapped()}")
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():
