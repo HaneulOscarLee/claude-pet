@@ -336,16 +336,20 @@ so this is how you get a picture of the window.
 
 | Action | Result |
 |---|---|
-| click, while it needs you | **jump to that session** (see below) |
-| click, otherwise | pin / unpin the speech bubble |
-| hover | it stops wandering, so you can reach it |
-| drag | move the pet; the position is remembered |
+| click | **jump to that session** (see below), or pin the bubble if there is nowhere to jump |
+| drag | move the pet — mid-stride is fine; it stops the moment you grab it |
 | right-click | switch pack; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
 
 Clicks land only on the sprite itself — the rest of the window is
 click-through, so the pet never steals a click meant for what is underneath.
 A drag only begins once the pointer has actually travelled a few pixels, so a
-plain click stays a click.
+plain click stays a click, and the pet keeps walking until you actually press
+it rather than freezing whenever the pointer passes over.
+
+The right-click menu closes when you click anywhere else, including on a
+Wayland-native window: the menu holds keyboard focus, so any such click arrives
+as focus-out. Watching the pointer grab instead would miss it, because an
+XWayland grab never sees a click that lands on a Wayland surface.
 
 ### Jumping back to a session
 

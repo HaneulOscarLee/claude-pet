@@ -155,8 +155,9 @@ JUMPABLE = {"waiting", "review", "failed"}
 #: Pointer travel, in pixels, that turns a click into a drag.
 DRAG_THRESHOLD = 5
 
-#: How long the right-click menu survives the pointer leaving it.
-MENU_CLOSE_DELAY_MS = 1200
+#: Focus changes within this long of opening the menu are setup noise, not a
+#: click on something else.
+MENU_FOCUS_GUARD_SECONDS = 0.3
 
 
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
@@ -221,10 +222,9 @@ class Overlay(Gtk.Window):
         self.flash_text = ""
         self.flash_until = 0.0
         self.press_origin: tuple[int, int] | None = None
-        self.menu_close_timer: int | None = None
+        self.menu_opened_at = 0.0
 
         self.dragging = False
-        self.hovered = False
         # The overlay owns its position. Reading it back from GTK on every walk
         # step accumulates frame-vs-client offset error and the pet drifts off
         # the floor and past its bounds.
@@ -247,8 +247,6 @@ class Overlay(Gtk.Window):
         self.connect("button-press-event", self._on_button_press)
         self.connect("button-release-event", self._on_button_release)
         self.connect("motion-notify-event", self._on_motion)
-        self.connect("enter-notify-event", self._on_enter)
-        self.connect("leave-notify-event", self._on_leave)
         self.connect("configure-event", self._on_configure)
         self.connect("destroy", lambda *_: self.quit())
         self.add_events(
@@ -455,9 +453,10 @@ class Overlay(Gtk.Window):
     def _update_walk(self, now: float) -> None:
         if not self.settings.get("walk", True):
             return
-        # Never wander while being touched: move() during a drag fights the
-        # window manager, and a pet that walks off is one you cannot catch.
-        if self.hovered or self.dragging or self.press_origin is not None:
+        # Stop the moment it is grabbed, not merely hovered: move() during a
+        # drag fights the window manager. Hovering leaves it walking, so it can
+        # be picked up mid-stride.
+        if self.dragging or self.press_origin is not None:
             return
 
         if self.walking and now >= self.walk_until:
@@ -649,16 +648,6 @@ class Overlay(Gtk.Window):
             self.next_walk_at, time.monotonic() + max(pause, WALK_PAUSE_RANGE[0])
         )
 
-    def _on_enter(self, _widget, _event) -> bool:
-        # Hovering is how you reach for the pet, so it should hold still.
-        self.hovered = True
-        self._halt_walk()
-        return False
-
-    def _on_leave(self, _widget, _event) -> bool:
-        self.hovered = False
-        return False
-
     def _on_motion(self, _widget, event) -> bool:
         if self.press_origin is None:
             return False
@@ -745,38 +734,31 @@ class Overlay(Gtk.Window):
         menu.append(quit_item)
 
         menu.show_all()
-        # The menu does take a pointer grab -- measured -- but an XWayland grab
-        # cannot see clicks that land on Wayland windows, so clicking a browser
-        # never dismisses it. Close it once the pointer has been away a moment.
-        menu.connect("enter-notify-event", self._on_menu_enter)
-        menu.connect("leave-notify-event", self._on_menu_leave)
-        menu.connect("deactivate", self._on_menu_closed)
         menu.popup_at_pointer(event)
 
-    def _cancel_menu_timer(self) -> None:
-        if self.menu_close_timer is not None:
-            GLib.source_remove(self.menu_close_timer)
-            self.menu_close_timer = None
+        # Closing on an outside click, not on the pointer merely wandering off.
+        # The menu takes keyboard focus -- measured -- so clicking any other
+        # window, Wayland-native included, shows up here as focus-out. Watching
+        # the grab instead would miss it: an XWayland grab never sees a click
+        # that lands on a Wayland surface.
+        self.menu_opened_at = time.monotonic()
+        toplevel = menu.get_toplevel()
+        if isinstance(toplevel, Gtk.Window):
+            toplevel.connect("notify::has-toplevel-focus", self._on_menu_focus_change, menu)
+        menu.connect("grab-broken-event", self._on_menu_grab_broken, menu)
 
-    def _on_menu_enter(self, _menu, _event) -> bool:
-        self._cancel_menu_timer()
-        return False
+    def _on_menu_focus_change(self, toplevel, _param, menu) -> None:
+        if toplevel.has_toplevel_focus():
+            return
+        # Focus can flicker while the menu is still being mapped; that is not a
+        # click on anything.
+        if time.monotonic() - self.menu_opened_at < MENU_FOCUS_GUARD_SECONDS:
+            return
+        menu.popdown()
 
-    def _on_menu_leave(self, menu, event) -> bool:
-        # Moving onto a menu item counts as leaving the menu itself; ignore it.
-        if event.detail == Gdk.NotifyType.INFERIOR:
-            return False
-        self._cancel_menu_timer()
-        self.menu_close_timer = GLib.timeout_add(MENU_CLOSE_DELAY_MS, self._close_menu, menu)
-        return False
-
-    def _close_menu(self, menu) -> bool:
-        self.menu_close_timer = None
+    def _on_menu_grab_broken(self, _menu, _event, menu) -> bool:
         menu.popdown()
         return False
-
-    def _on_menu_closed(self, _menu) -> None:
-        self._cancel_menu_timer()
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():
