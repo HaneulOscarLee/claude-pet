@@ -741,7 +741,16 @@ class Overlay(Gtk.Window):
         menu.append(quit_item)
 
         menu.show_all()
+        # The pet window refuses focus so it never steals your keyboard. That
+        # also stops the menu taking a grab, which left it open when you clicked
+        # elsewhere -- so lend the window focus for as long as the menu is up.
+        self.set_accept_focus(True)
+        menu.connect("deactivate", self._on_menu_closed)
+        menu.connect("hide", self._on_menu_closed)
         menu.popup_at_pointer(event)
+
+    def _on_menu_closed(self, _menu) -> None:
+        self.set_accept_focus(False)
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():

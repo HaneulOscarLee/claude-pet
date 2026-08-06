@@ -8,12 +8,16 @@ reliability and reports honestly when none of it applies:
    pane rather than merely raising a window.
 2. **X11 / XWayland terminals** -- activate the window owned by one of the
    session's ancestor processes, via `wmctrl` or `xdotool`.
+3. **D-Bus** -- ask the terminal to present *itself*. A client may not raise
+   someone else's window under mutter, but an application is always allowed to
+   raise its own, so this is the route that works for a Wayland-native
+   terminal. Terminator's `unhide_cmdline` and the standard
+   `org.freedesktop.Application.Activate` are both tried.
 
-There is deliberately no Wayland fallback. Under mutter a client cannot raise
-another application's window: `org.gnome.Shell.FocusApp`, `.Introspect` and
-`.Eval` all answer AccessDenied, and xdg-activation needs a token only the
-target app can hand out. A GNOME-Wayland terminal cannot be raised, so the pet
-says so instead of pretending.
+What is *not* possible is reaching over and raising an unco-operative Wayland
+window: `org.gnome.Shell.FocusApp`, `.Introspect` and `.Eval` all answer
+AccessDenied, and xdg-activation needs a token only the target app can hand out.
+When none of the three routes applies, the pet says so instead of pretending.
 """
 
 from __future__ import annotations
@@ -111,11 +115,68 @@ def _x11_jump(locator: dict[str, Any]) -> JumpResult | None:
     return JumpResult(False, "could not raise the terminal")
 
 
+def _bus_names() -> list[tuple[str, int]]:
+    """Session-bus names with the pid that owns each, best effort."""
+    if not shutil.which("busctl"):
+        return []
+    try:
+        listing = subprocess.run(  # noqa: S603
+            ["busctl", "--user", "list", "--no-pager", "--no-legend"],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    owners: list[tuple[str, int]] = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[1].isdigit():
+            owners.append((fields[0], int(fields[1])))
+    return owners
+
+
+def _dbus_jump(locator: dict[str, Any]) -> JumpResult | None:
+    """Ask the terminal to present itself, over D-Bus.
+
+    The one approach that works for a Wayland-native terminal: a client may not
+    raise someone else's window, but an application is always allowed to raise
+    its own, and several terminals expose exactly that on the session bus.
+    """
+    pids = {pid for pid in locator.get("pids") or [] if isinstance(pid, int)}
+    if not pids or not shutil.which("gdbus"):
+        return None
+
+    for name, owner in _bus_names():
+        if owner not in pids:
+            continue
+
+        # Terminator's own interface. Its "unhide" is what its show-window
+        # hotkey calls, and the bus name doubles as the interface name.
+        if name.startswith("net.tenshu.Terminator"):
+            if _run([
+                "gdbus", "call", "--session", "--dest", name,
+                "--object-path", "/net/tenshu/Terminator2",
+                "--method", f"{name}.unhide_cmdline", "{}",
+            ]):
+                return JumpResult(True, "raised the terminal")
+
+        # The standard route for anything GTK/GApplication-based.
+        path = "/" + name.replace(".", "/").replace("-", "_")
+        if _run([
+            "gdbus", "call", "--session", "--dest", name,
+            "--object-path", path,
+            "--method", "org.freedesktop.Application.Activate", "{}",
+        ]):
+            return JumpResult(True, "raised the terminal")
+    return None
+
+
 def capabilities() -> dict[str, bool]:
     """What jump methods this machine could use at all."""
     return {
         "tmux": shutil.which("tmux") is not None,
         "x11": bool(shutil.which("wmctrl") or shutil.which("xdotool")),
+        "dbus": bool(shutil.which("gdbus") and shutil.which("busctl")),
     }
 
 
@@ -124,7 +185,7 @@ def to_session(locator: dict[str, Any] | None) -> JumpResult:
     if not locator:
         return JumpResult(False, "no location recorded for that session")
 
-    for attempt in (_tmux_jump, _x11_jump):
+    for attempt in (_tmux_jump, _x11_jump, _dbus_jump):
         result = attempt(locator)
         if result is not None:
             return result
