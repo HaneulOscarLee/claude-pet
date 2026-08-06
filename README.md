@@ -49,7 +49,7 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil libnotif
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/claude-pet.git
+git clone https://github.com/HaneulOscarLee/claude-pet.git
 cd claude-pet
 ./claude-pet doctor          # confirm the environment is ready
 ```
