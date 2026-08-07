@@ -309,6 +309,11 @@ def update(session_id: str, **fields: Any) -> dict[str, Any]:
 
         if fields.get("state", "") is None:
             sessions.pop(session_id, None)
+        elif "state" not in fields and session_id not in sessions:
+            # "Leave the state as it was" for a session there is no record of.
+            # There is nothing to leave alone, and inventing a stateless entry
+            # only produces one that reads as idle and has lost its history.
+            pass
         else:
             session = sessions.get(session_id) or {}
             session.update({key: value for key, value in fields.items() if value is not None})

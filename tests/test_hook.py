@@ -18,8 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def run(events: list[tuple[str, dict]], session_id: str = "s") -> dict:
-    """Feed a sequence of hook events to one session and return its entry."""
+    """Feed a sequence of hook events to one session and return its entry.
+
+    Liveness is pinned: these fixtures record no usable Claude pid, so on a
+    machine with no Claude running -- CI, notably -- every session would be
+    pruned as dead between events and the sequences would never build up.
+    """
     from claude_pet import hook, state
+
+    state.any_claude_running = lambda: True
 
     for name, extra in events:
         payload = {"hook_event_name": name, "session_id": session_id, **extra}
@@ -116,6 +123,11 @@ def lifecycle_checks() -> list[tuple[str, bool]]:
 
     unknown = run([("UserPromptSubmit", {}), ("NotAThing", {})], "unknown")
     results.append(("an unknown event changes nothing", unknown.get("state") == "running"))
+
+    # "Leave the state alone" for a session nobody has heard of has nothing to
+    # leave alone, and used to invent a stateless entry that read as idle.
+    orphan = run([("SubagentStop", {})], "orphan")
+    results.append(("SubagentStop alone creates nothing", orphan == {}))
     return results
 
 
