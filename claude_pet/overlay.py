@@ -155,10 +155,6 @@ JUMPABLE = {"waiting", "review", "failed"}
 #: Pointer travel, in pixels, that turns a click into a drag.
 DRAG_THRESHOLD = 5
 
-#: Grab changes within this long of opening the menu are setup noise, not a
-#: click on something else.
-MENU_GRAB_GUARD_SECONDS = 0.3
-
 #: Set CLAUDE_PET_DEBUG=1 to trace menu dismissal decisions. The signals here
 #: differ between X11 and Wayland surfaces and cannot be reasoned about from the
 #: outside, so this stays available rather than being guesswork each time.
@@ -725,129 +721,134 @@ class Overlay(Gtk.Window):
         self._apply_input_shape()
         self.queue_draw()
 
+    def _menu_row(self, label: str, callback, *, active: bool | None = None) -> Gtk.Widget:
+        """One clickable line of the popup."""
+        if active is None:
+            button = Gtk.Button(label=label)
+        else:
+            button = Gtk.Button(label=("✓  " if active else "    ") + label)
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_alignment(0.0, 0.5)
+        button.connect("clicked", callback)
+        return button
+
     def _show_menu(self, event) -> None:
-        # Never leave an older menu behind: they are override-redirect windows
-        # that outlive a popdown, and a stale one stays on screen forever.
+        """A plain window, deliberately not a Gtk.Menu.
+
+        A GtkMenu is an override-redirect window holding a keyboard grab, and
+        that grab is why clicking another application never dismissed it: focus
+        cannot move while it is held, so no focus-out arrives, and a click on a
+        Wayland surface never reaches an XWayland grab either. An ordinary
+        focusable window is managed by the compositor and gets focus-out from
+        any click, on X11 or Wayland alike.
+        """
         if self.menu is not None:
             self.menu.destroy()
             self.menu = None
 
-        menu = Gtk.Menu()
-        self.menu = menu
+        popup = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        popup.set_decorated(False)
+        popup.set_keep_above(True)
+        popup.set_skip_taskbar_hint(True)
+        popup.set_skip_pager_hint(True)
+        popup.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        popup.set_resizable(False)
 
-        header = Gtk.MenuItem(label=f"{self.view.pet.display_name} · v{self.view.pet.version}")
+        frame = Gtk.Frame()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(4)
+        box.set_margin_bottom(4)
+        frame.add(box)
+        popup.add(frame)
+
+        def close(*_args) -> None:
+            self._dismiss(popup)
+
+        header = Gtk.Label(label=f"{self.view.pet.display_name} · v{self.view.pet.version}")
         header.set_sensitive(False)
-        menu.append(header)
-        menu.append(Gtk.SeparatorMenuItem())
+        header.set_margin_start(12)
+        header.set_margin_end(12)
+        header.set_margin_bottom(4)
+        header.set_alignment(0.0, 0.5)
+        box.pack_start(header, False, False, 0)
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
 
-        available = config.discover()
-        for pet_id in available:
-            item = Gtk.CheckMenuItem(label=pet_id)
-            item.set_active(pet_id == self.view.pet.id)
-            item.connect("activate", self._on_pick_pet, pet_id)
-            menu.append(item)
+        for pet_id in config.discover():
+            def pick(_button, chosen=pet_id) -> None:
+                close()
+                self.settings["pet"] = chosen
+                config.update(pet=chosen)
+                self.quit(restart=True)
 
-        menu.append(Gtk.SeparatorMenuItem())
-        walk = Gtk.CheckMenuItem(label=self.labels["menu.walk"])
-        walk.set_active(bool(self.settings.get("walk", True)))
-        walk.connect("toggled", self._on_toggle, "walk")
-        menu.append(walk)
+            box.pack_start(
+                self._menu_row(pet_id, pick, active=pet_id == self.view.pet.id), False, False, 0
+            )
 
-        notify = Gtk.CheckMenuItem(label=self.labels["menu.notify"])
-        notify.set_active(bool(self.settings.get("notifications", False)))
-        notify.connect("toggled", self._on_toggle, "notifications")
-        menu.append(notify)
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
 
-        autostart = Gtk.CheckMenuItem(label=self.labels["menu.autostart"])
-        autostart.set_active(bool(self.settings.get("autostart", True)))
-        autostart.connect("toggled", self._on_toggle, "autostart")
-        menu.append(autostart)
+        for key, label, default in (
+            ("walk", self.labels["menu.walk"], True),
+            ("notifications", self.labels["menu.notify"], False),
+            ("autostart", self.labels["menu.autostart"], True),
+            ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
+        ):
+            def toggle(_button, name=key) -> None:
+                self.settings[name] = not self.settings.get(name)
+                config.update(**{name: self.settings[name]})
+                close()
 
-        exit_idle = Gtk.CheckMenuItem(label=self.labels["menu.exit_idle"])
-        exit_idle.set_active(bool(self.settings.get("exit_when_no_sessions", True)))
-        exit_idle.connect("toggled", self._on_toggle, "exit_when_no_sessions")
-        menu.append(exit_idle)
+            box.pack_start(
+                self._menu_row(label, toggle, active=bool(self.settings.get(key, default))),
+                False, False, 0,
+            )
 
-        menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label=self.labels["menu.quit"])
-        quit_item.connect("activate", lambda *_: self.quit())
-        menu.append(quit_item)
-
-        menu.show_all()
-        menu.popup_at_pointer(event)
-
-        # Closing on an outside click, in two halves. A click on an X11 window
-        # arrives as a button press outside the menu's grab, which GTK already
-        # handles. A click on a Wayland surface never reaches an XWayland grab
-        # at all -- mutter takes the grab away instead, which lands here.
-        #
-        # Focus is no help: measured that the menu keeps has-toplevel-focus even
-        # while another window is presented, because it holds a keyboard grab.
-        self.menu_opened_at = time.monotonic()
-        menu.connect("grab-broken-event", self._on_menu_grab_broken, menu)
-        menu.connect("unmap", lambda *_: trace("menu unmapped"))
-        trace(f"menu popped, toplevel xid={_xid(menu)}")
-
-    def _on_menu_grab_broken(self, _menu, event, menu) -> bool:
-        age = time.monotonic() - self.menu_opened_at
-        pointer = Gdk.Display.get_default().get_default_seat().get_pointer()
-        position = pointer.get_position()[1:] if pointer else ("?", "?")
-        trace(
-            f"grab-broken implicit={getattr(event, 'implicit', None)} "
-            f"age={age:.2f}s pointer={position}"
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+        box.pack_start(
+            self._menu_row(self.labels["menu.quit"], lambda *_: (close(), self.quit())),
+            False, False, 0,
         )
 
-        # Popping the menu replaces the implicit grab taken by the right-click
-        # that opened it. Treating that as somebody else taking over shut the
-        # menu the instant it appeared.
-        if getattr(event, "implicit", False):
-            trace("  ignored: implicit grab replacement")
-            return False
-        if age < MENU_GRAB_GUARD_SECONDS:
-            trace("  ignored: within the open guard")
-            return False
-        self._dismiss(menu)
-        return False
+        popup.connect("focus-out-event", lambda *_: (close(), False)[1])
+        popup.connect(
+            "key-press-event",
+            lambda _w, key_event: (
+                close() or True if key_event.keyval == Gdk.KEY_Escape else False
+            ),
+        )
 
-    def _dismiss(self, menu) -> None:
-        """Take the menu's window off the screen, whatever it takes.
+        popup.show_all()
+        self._place_menu(popup, event)
+        popup.present()
 
-        When the grab is broken by a Wayland surface the menu is left in a state
-        where GTK's own teardown does not reach the X window: popdown(),
-        deactivate(), hiding the toplevel and even destroy() all reported success
-        while `xwininfo` still showed the window IsViewable. So the underlying
-        GdkWindow is unmapped directly and the display flushed, before the widget
-        is destroyed.
+        self.menu = popup
+        self.menu_opened_at = time.monotonic()
+        trace(f"menu popped, xid={_xid(popup)}")
+
+    def _place_menu(self, popup: Gtk.Window, event) -> None:
+        """Put the popup above the pet, kept inside the work area."""
+        width, height = popup.get_size()
+        area = self._workarea()
+        x = int(getattr(event, "x_root", self.pos_x)) - width // 2
+        y = self.pos_y + self.sprite_top - height - 4
+        x = min(max(x, area.x), area.x + area.width - width)
+        y = min(max(y, area.y), area.y + area.height - height)
+        popup.move(x, y)
+
+    def _dismiss(self, popup) -> None:
+        """Close the popup for good.
+
+        It is an ordinary window now, so hiding it is enough -- but it is
+        destroyed anyway, since a fresh one is built for every right-click and a
+        leftover would linger on screen.
         """
-        trace("  closing the menu")
-        toplevel = menu.get_toplevel()
-        surface = toplevel.get_window() if isinstance(toplevel, Gtk.Window) else None
-
-        menu.popdown()
-        if isinstance(toplevel, Gtk.Window):
-            toplevel.hide()
-        if surface is not None and surface.is_visible():
-            trace("  X window still up; unmapping it directly")
-            surface.hide()
-
-        menu.destroy()
-        if self.menu is menu:
-            self.menu = None
-
-        Gdk.Display.get_default().flush()
-        still = surface.is_visible() if surface is not None else None
-        trace(f"  menu destroyed (X window visible={still})")
-
-    def _on_pick_pet(self, item, pet_id: str) -> None:
-        if not item.get_active():
+        if popup is None:
             return
-        self.settings["pet"] = pet_id
-        config.update(pet=pet_id)
-        self.quit(restart=True)
-
-    def _on_toggle(self, item, key: str) -> None:
-        self.settings[key] = item.get_active()
-        config.update(**{key: self.settings[key]})
+        trace(f"closing the menu xid={_xid(popup)}")
+        popup.hide()
+        popup.destroy()
+        if self.menu is popup:
+            self.menu = None
+        Gdk.Display.get_default().flush()
 
     # ---------------------------------------------------------------- teardown
 

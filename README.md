@@ -348,10 +348,13 @@ A drag only begins once the pointer has actually travelled a few pixels, so a
 plain click stays a click, and the pet keeps walking until you actually press
 it rather than freezing whenever the pointer passes over.
 
-The right-click menu closes when you click anywhere else, including on a
-Wayland-native window: the menu holds keyboard focus, so any such click arrives
-as focus-out. Watching the pointer grab instead would miss it, because an
-XWayland grab never sees a click that lands on a Wayland surface.
+The right-click menu is an ordinary window rather than a `GtkMenu`, which is
+what makes it close when you click anywhere else — including on a
+Wayland-native window. A `GtkMenu` holds a keyboard grab, and that grab is
+precisely the problem: focus cannot move while it is held, so no focus-out ever
+arrives, and a click landing on a Wayland surface never reaches an XWayland grab
+either. An ordinary focusable window is managed by the compositor and gets
+focus-out from any click, on either kind of surface.
 
 ### Jumping back to a session
 
