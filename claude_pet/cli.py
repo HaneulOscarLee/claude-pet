@@ -399,15 +399,27 @@ def cmd_status(_args: argparse.Namespace) -> int:
     entries = data.get("sessions", {})
     if entries:
         print("sessions  :")
+    from . import desktop
+
     for session_id, session in entries.items():
         if not isinstance(session, dict):
             continue
         alive = state.is_alive(session, now)
-        where = (session.get("locator") or {}).get("claude_pid")
-        note = "" if alive else "  DEAD (claude process gone, will be dropped)"
+        locator = session.get("locator") or {}
+        where = locator.get("claude_pid")
+        # The app's own entry is not a Claude session and has no short id worth
+        # truncating, so it is named in full and its process named correctly.
+        is_app = session_id == desktop.SESSION_ID
+        gone = "Claude Desktop closed" if is_app else "claude process gone"
+        note = "" if alive else f"  DEAD ({gone}, will be dropped)"
+        label = session_id if is_app else session_id[:8]
+        origin = locator.get("origin")
+        detail = session.get("detail") or ""
+        if origin == desktop.ORIGIN_DESKTOP and not is_app:
+            detail = f"{detail} (in Claude Desktop)".strip()
         print(
-            f"  {session_id[:8]}  {str(session.get('state')):<8} "
-            f"{session.get('detail') or '':<28} pid={where or '?'}{note}"
+            f"  {label:<14}  {str(session.get('state')):<8} "
+            f"{detail:<28} pid={where or '?'}{note}"
         )
     return 0
 
@@ -683,6 +695,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         hint = "install wmctrl (or xdotool) to raise the terminal, or run Claude in tmux"
     optional("click-to-jump", bool(usable), hint)
+
+    from . import desktop
+
+    if desktop.installed():
+        settings = config.load()
+        if not settings.get("desktop", True):
+            note = "off — turn it on from the pet's right-click menu"
+        elif desktop.running():
+            note = "app running; chat replies and its Claude Code sessions both show"
+        else:
+            note = "app installed but not running"
+        print(f"  INFO  claude desktop: {note}")
 
     from . import terminal
 

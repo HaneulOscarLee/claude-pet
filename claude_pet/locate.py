@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from . import desktop
+
 #: Processes between the hook and the terminal that are never the terminal.
 _TRANSPARENT = {
     "bash", "sh", "zsh", "fish", "dash", "python3", "python", "node",
@@ -85,6 +87,12 @@ def locator() -> dict[str, Any]:
     owner = claude_pid()
     if owner is not None:
         found["claude_pid"] = owner
+
+    # Claude Desktop runs the same Claude Code binary, so its sessions arrive
+    # here indistinguishably -- except in the ancestry. Recording which side a
+    # session came from now is the only chance to know: the app is
+    # Wayland-native, so afterwards it owns no window to recognise it by.
+    found["origin"] = desktop.origin_of(chain)
 
     pane = os.environ.get("TMUX_PANE")
     tmux = os.environ.get("TMUX")

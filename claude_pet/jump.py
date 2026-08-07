@@ -31,6 +31,8 @@ import shutil
 import subprocess
 from typing import Any
 
+from . import desktop
+
 TIMEOUT_SECONDS = 3
 
 
@@ -53,6 +55,20 @@ def _run(argv: list[str]) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return done.returncode == 0
+
+
+def _desktop_jump(locator: dict[str, Any]) -> JumpResult | None:
+    """Sessions running inside Claude Desktop go back to the app, not a terminal.
+
+    Tried first because none of the other routes could ever work for one: the
+    app is Wayland-native so it owns no X window, it exports no session-bus
+    name, and a session it started has no tmux pane. Without this they would
+    all decline in turn and the pet would say it had nowhere to go.
+    """
+    if locator.get("origin") != desktop.ORIGIN_DESKTOP:
+        return None
+    ok, message = desktop.focus()
+    return JumpResult(ok, message)
 
 
 def _tmux_jump(locator: dict[str, Any]) -> JumpResult | None:
@@ -184,6 +200,7 @@ def capabilities() -> dict[str, bool]:
         "tmux": shutil.which("tmux") is not None,
         "x11": bool(shutil.which("wmctrl") or shutil.which("xdotool")),
         "dbus": bool(shutil.which("gdbus") and shutil.which("busctl")),
+        "desktop": desktop.installed(),
     }
 
 
@@ -192,7 +209,7 @@ def to_session(locator: dict[str, Any] | None) -> JumpResult:
     if not locator:
         return JumpResult(False, "no location recorded for that session")
 
-    for attempt in (_tmux_jump, _x11_jump, _dbus_jump):
+    for attempt in (_desktop_jump, _tmux_jump, _x11_jump, _dbus_jump):
         result = attempt(locator)
         if result is not None:
             return result

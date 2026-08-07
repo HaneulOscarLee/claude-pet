@@ -151,9 +151,16 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
         # after everything had closed, so ask whether any Claude exists at all.
         return any_claude_running()
 
+    # Claude Desktop's own entry is watched the same way, but its process is
+    # not called `claude`, so the locator names what to expect.
+    expected = CLAUDE_COMM
+    recorded = locator.get("comm") if isinstance(locator, dict) else None
+    if isinstance(recorded, str) and recorded:
+        expected = recorded
+
     # The comm check guards against the pid being reused by something unrelated
     # between the session dying and us looking at it.
-    return _comm_of(pid) == CLAUDE_COMM
+    return _comm_of(pid) == expected
 
 
 def _prune(sessions: dict[str, Any], now: float) -> None:

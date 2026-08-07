@@ -33,6 +33,11 @@ jobs:
       - name: Aggregation and liveness tests
         run: python3 tests/test_aggregate.py
 
+      # The Claude Desktop side stubs /proc and D-Bus, so it runs on a headless
+      # box with the app nowhere in sight.
+      - name: Claude Desktop tests
+        run: python3 tests/test_desktop.py
+
       - name: Bundled pack parses
         run: |
           python3 - <<'PY'

@@ -234,6 +234,46 @@ Desktop notifications are **off** by default — the bubble is the channel, and
 a notification on top of it is the same news twice. Turn them on with
 `claude-pet set notifications true` or from the right-click menu.
 
+### The Claude Desktop app
+
+The pet follows the [Claude Desktop](https://claude.ai/download) app too, and
+how well depends on which half of it you are using.
+
+| In Claude Desktop | Pet shows | How |
+|---|---|---|
+| a **Claude Code** session | every state, exactly as in a terminal | the app runs the real Claude Code binary, which fires the same hooks |
+| a **plain chat** | **done** / **needs you** when a reply lands | the app's desktop notification, the only turn signal it emits |
+| app open, nothing happening | `idle`, and the pet stays up | — |
+
+**Claude Code inside the app needs no setup.** Claude Desktop downloads and runs
+the ordinary Claude Code binary, and it reads the same `~/.claude/settings.json`
+your terminal sessions do — so once the hooks are installed, sessions started in
+the app drive the pet identically. Clicking the pet brings the app forward
+rather than hunting for a terminal that does not exist.
+
+**A plain chat is coarser, and honestly so.** There is no hook surface on that
+side. The one signal the app emits is the desktop notification it posts when a
+reply arrives, so that is what the pet watches — which means:
+
+- you get **done** (or **needs you**, if the notification is asking for a
+  decision), held for the usual 20 seconds; you do **not** get **working**,
+  because nothing announces the start of a turn
+- notifications only fire while the app's window is **unfocused**, which is
+  exactly when a pet is worth glancing at, and never when you are already
+  looking at the reply
+- if you have turned notifications off in Claude Desktop, there is nothing left
+  to watch and plain chats will not register
+
+Watching them needs a D-Bus *monitor* connection, because `Notify` is a method
+call to the notification daemon rather than a broadcast. Notifications from
+other applications are ignored, and so are the pet's own.
+
+While the app is open it counts as a live session, so the pet does not decide
+everything has gone and quit. Turn the whole thing off with
+`claude-pet set desktop false`, or **Follow Claude Desktop** in the right-click
+menu — the pet then goes back to tracking terminal sessions only.
+`claude-pet doctor` reports what it can see.
+
 ## Usage
 
 ```
@@ -299,7 +339,9 @@ state     : running  (1 sessions)
 detail    : Bash
 active pet: clawd
 state file: /home/you/.local/state/claude-pet/state.json
-  ed0f2f9c  running  Bash
+sessions  :
+  ed0f2f9c        running  Bash                pid=3050615
+  claude-desktop  review                       pid=14067
 ```
 
 ### Integration
@@ -348,6 +390,7 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
 | `update_check` | `true` | look for a newer version in the background |
+| `desktop` | `true` | follow the Claude Desktop app as well as terminal sessions |
 | `exit_when_no_sessions` | `true` | quit once every Claude session has ended |
 | `exit_grace_seconds` | `30` | how long to wait first, in case one reopens |
 | `position` | `null` | remembered drag position |
@@ -403,6 +446,7 @@ When the pet is showing **needs you**, **done** or **failed**, the bubble adds
 
 | Setup | What happens |
 |---|---|
+| session started in **Claude Desktop** | brings the app forward |
 | Claude running inside **tmux** | switches to the exact pane — precise and reliable |
 | **X11 or XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window (`setup` installs `wmctrl`) |
 | **Wayland-native** terminal that implements `org.freedesktop.Application` | asks the terminal to present itself |

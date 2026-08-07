@@ -31,11 +31,23 @@ for _namespace, _version in (
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
-from . import config, jump, sprites, state  # noqa: E402
+from . import config, desktop, jump, sprites, state  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
 POLL_INTERVAL_MS = 250
+
+#: How often the Claude Desktop app is looked for. It has no hooks to announce
+#: itself, so presence has to be polled -- but that is a /proc sweep, and the
+#: state poll runs four times a second, so the two are deliberately decoupled.
+DESKTOP_CHECK_SECONDS = 5.0
+
+#: How often its entry is re-stamped while it stays open. Only needs to beat
+#: the session TTL; more often would just be lock contention with the hooks.
+DESKTOP_KEEPALIVE_SECONDS = 300.0
+
+#: Shown where a session's project name goes. The app has no working directory.
+DESKTOP_LABEL = "Claude Desktop"
 EDGE_MARGIN = 12
 
 #: Look frames ordered left-to-right. A v2 sheet stores 16 yaw poses across
@@ -80,6 +92,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.walk": "Wander around",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
+        "menu.desktop": "Follow Claude Desktop",
         "menu.exit_idle": "Quit when no sessions",
         "menu.browse": "Browse the gallery…",
         "menu.install": "Install a pet…",
@@ -108,6 +121,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.walk": "돌아다니기",
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
+        "menu.desktop": "Claude Desktop 연동",
         "menu.exit_idle": "세션 없으면 종료",
         "menu.browse": "갤러리 열기…",
         "menu.install": "펫 설치…",
@@ -263,6 +277,9 @@ class Overlay(Gtk.Window):
         self.bubble_pinned = False
         self.empty_since: float | None = None
         self.locator: dict[str, Any] | None = None
+        self.desktop_watcher: desktop.NotifyWatcher | None = None
+        self.desktop_checked_at = 0.0
+        self.desktop_written_at = 0.0
         # A short-lived bubble override, for telling the user how a click went.
         self.flash_text = ""
         self.flash_until = 0.0
@@ -312,6 +329,7 @@ class Overlay(Gtk.Window):
         if poll:
             GLib.timeout_add(POLL_INTERVAL_MS, self._poll_state)
             self._schedule_update_check()
+            self._start_desktop_watch()
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -385,12 +403,108 @@ class Overlay(Gtk.Window):
     # ----------------------------------------------------------------- state
 
     def _poll_state(self) -> bool:
+        self._refresh_desktop()
         # Re-aggregated every time, not only when the file changes: dwells
         # expire on the clock, so the same file yields a different state later.
         snapshot = state.aggregate()
         self._adopt(snapshot)
         self._maybe_exit(snapshot)
         return True
+
+    # -------------------------------------------------------- Claude Desktop
+
+    def _start_desktop_watch(self) -> None:
+        """Begin eavesdropping on the app's desktop notifications.
+
+        Optional in the strongest sense: if the session bus will not hand out a
+        monitor connection, the app simply contributes no chat state and the
+        rest of the pet is unaffected.
+        """
+        if self.desktop_watcher is not None:
+            return
+        if not self.settings.get("desktop", True) or not desktop.installed():
+            return
+
+        watcher = desktop.NotifyWatcher(self._on_desktop_notification)
+        if watcher.start():
+            self.desktop_watcher = watcher
+            trace("watching Claude Desktop notifications")
+        else:
+            trace(f"no Claude Desktop notification watch: {watcher.error}")
+
+    def _stop_desktop_watch(self) -> None:
+        watcher, self.desktop_watcher = self.desktop_watcher, None
+        if watcher is not None:
+            watcher.stop()
+
+    def _on_desktop_notification(self, state_name: str, detail: str) -> None:
+        """A reply landed in the app. Runs on the main loop, via idle_add."""
+        try:
+            state.update(
+                desktop.SESSION_ID,
+                state=state_name,
+                detail=detail,
+                cwd=DESKTOP_LABEL,
+                locator=desktop.locator(),
+            )
+        except OSError:
+            return
+        self.desktop_written_at = time.monotonic()
+        self._poll_state()  # show it now rather than up to a quarter-second late
+
+    def _apply_desktop_setting(self) -> None:
+        """Start or stop following the app, after the menu toggle."""
+        if self.settings.get("desktop", True):
+            self.desktop_checked_at = 0.0
+            self.desktop_written_at = 0.0
+            self._start_desktop_watch()
+            return
+
+        self._stop_desktop_watch()
+        # Drop the entry rather than let it linger: it survives on the app's
+        # pid, so switching off would otherwise keep the pet alive until the
+        # app was closed.
+        try:
+            state.update(desktop.SESSION_ID, state=None)
+        except OSError:
+            pass
+
+    def _refresh_desktop(self) -> None:
+        """Keep the app's entry in the state file in step with the app itself.
+
+        Nothing else ever writes it -- there are no hooks on that side -- and
+        without it an open Claude Desktop would not stop the pet concluding
+        that every session had gone and quitting.
+        """
+        if not self.settings.get("desktop", True):
+            return
+
+        now = time.monotonic()
+        if now - self.desktop_checked_at < DESKTOP_CHECK_SECONDS:
+            return
+        self.desktop_checked_at = now
+
+        if desktop.main_pid() is None:
+            # No deletion needed: the entry names the pid to watch, so
+            # `state.is_alive` prunes it as soon as the app exits.
+            return
+
+        known = state.read().get("sessions", {}).get(desktop.SESSION_ID)
+        fields: dict[str, Any] = {"cwd": DESKTOP_LABEL, "locator": desktop.locator()}
+        if isinstance(known, dict):
+            if now - self.desktop_written_at < DESKTOP_KEEPALIVE_SECONDS:
+                return
+            # `state` is left out on purpose. Passing it would stamp `idle` over
+            # a reply the app announced seconds ago; omitting it keeps whatever
+            # is stored and only refreshes the timestamp.
+        else:
+            fields["state"] = "idle"
+
+        try:
+            state.update(desktop.SESSION_ID, **fields)
+        except OSError:
+            return
+        self.desktop_written_at = now
 
     def _maybe_exit(self, snapshot: dict[str, Any]) -> None:
         """Shut down once every Claude session is gone.
@@ -838,15 +952,23 @@ class Overlay(Gtk.Window):
         )
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
 
-        for key, label, default in (
+        toggles = [
             ("walk", self.labels["menu.walk"], True),
             ("notifications", self.labels["menu.notify"], False),
             ("autostart", self.labels["menu.autostart"], True),
             ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
-        ):
+        ]
+        # Only offered where it means something. On a machine without the app
+        # the row would be a switch wired to nothing.
+        if desktop.installed():
+            toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
+
+        for key, label, default in toggles:
             def toggle(_button, name=key) -> None:
                 self.settings[name] = not self.settings.get(name)
                 config.update(**{name: self.settings[name]})
+                if name == "desktop":
+                    self._apply_desktop_setting()
                 close()
 
             box.pack_start(
@@ -1125,6 +1247,7 @@ class Overlay(Gtk.Window):
     # ---------------------------------------------------------------- teardown
 
     def quit(self, restart: bool = False) -> None:
+        self._stop_desktop_watch()
         try:
             state.pid_path().unlink()
         except OSError:

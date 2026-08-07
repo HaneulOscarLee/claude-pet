@@ -22,6 +22,11 @@ DEFAULTS: dict[str, Any] = {
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background
+    # Follow the Claude Desktop app too: report its chat replies, and count it
+    # as a live session so the pet stays up while it is open. Claude Code
+    # sessions started *inside* the app already arrive through the hooks and
+    # are unaffected by this.
+    "desktop": True,
     "exit_when_no_sessions": True,  # quit once every Claude session is gone
     # Long enough to survive swapping terminals, short enough that "did it
     # actually quit?" is answerable without a coffee break. Overshooting costs
