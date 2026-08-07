@@ -234,8 +234,65 @@ def update(check_only: bool = False) -> int:
         for line in log.splitlines()[:10]:
             print(f"  {line}")
 
+    _report_new_requirements()
     _restart_overlay()
     return 0
+
+
+#: Optional pieces that a version might newly depend on, and how to get them.
+#: Package names per distro, because "install the app indicator bindings" is
+#: not a thing anyone can act on.
+_OPTIONAL = (
+    (
+        "status-bar menu",
+        lambda: __import__("claude_pet.tray", fromlist=["tray"]).available(),
+        {
+            "apt": "gir1.2-ayatanaappindicator3-0.1",
+            "dnf": "libayatana-appindicator-gtk3",
+            "pacman": "libayatana-appindicator",
+            "zypper": "typelib-1_0-AyatanaAppIndicator3-0_1",
+        },
+    ),
+)
+
+
+def _package_manager() -> tuple[str, str] | None:
+    for manager, install in (
+        ("apt", "sudo apt install"),
+        ("dnf", "sudo dnf install"),
+        ("pacman", "sudo pacman -S"),
+        ("zypper", "sudo zypper install"),
+    ):
+        if shutil.which(manager):
+            return manager, install
+    return None
+
+
+def _report_new_requirements() -> None:
+    """Name anything the new version can use but cannot find.
+
+    An update replaces code, not packages. Without this a feature added in a
+    release is simply absent for everyone who updates rather than installs,
+    with nothing on screen to say why -- which is the worst way to ship one.
+    """
+    missing = []
+    for label, probe, packages in _OPTIONAL:
+        try:
+            if probe():
+                continue
+        except Exception:  # noqa: BLE001 - a probe must not break the update
+            continue
+        missing.append((label, packages))
+    if not missing:
+        return
+
+    found = _package_manager()
+    print("\nthis version can do more with a package you do not have:")
+    for label, packages in missing:
+        if found is not None and found[0] in packages:
+            print(f"  {label}: {found[1]} {packages[found[0]]}")
+        else:
+            print(f"  {label}: install one of {', '.join(sorted(set(packages.values())))}")
 
 
 def _restart_overlay() -> None:
