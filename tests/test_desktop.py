@@ -88,6 +88,64 @@ def liveness_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def dwell_checks() -> list[tuple[str, bool]]:
+    """A notification is an edge, so what it sets has to expire by itself.
+
+    The app announces that a reply arrived and never says it was read. Left on
+    the shared dwell table `waiting` holds forever by design -- correct for a
+    Claude Code session that keeps re-reporting it, a pet stuck on "needs you"
+    for anything derived from a notification.
+    """
+    results = []
+
+    def entry(name: str, age: float, dwell: float | None) -> dict:
+        session = {"state": name, "ts": NOW - age, "detail": "Claude"}
+        if dwell is not None:
+            session["dwell"] = dwell
+        return session
+
+    results.append(
+        ("notification waiting expires",
+         state.effective_state(entry("waiting", 90, 60.0), NOW) == "idle")
+    )
+    results.append(
+        ("notification waiting holds until then",
+         state.effective_state(entry("waiting", 30, 60.0), NOW) == "waiting")
+    )
+    # The rule it overrides, unchanged for real sessions.
+    results.append(
+        ("a real session's waiting still never expires",
+         state.effective_state(entry("waiting", 10800, None), NOW) == "waiting")
+    )
+    results.append(
+        ("notification review expires on schedule",
+         state.effective_state(entry("review", 25, 20.0), NOW) == "idle")
+    )
+    results.append(
+        ("every classified state has a dwell",
+         all(name in desktop.NOTIFY_DWELL_SECONDS for name in ("review", "waiting")))
+    )
+
+    # Keeping a long-lived entry alive must not restart its dwell -- the bug
+    # that resurrected an hour-old "needs you" every few minutes.
+    stale = {"state": "waiting", "ts": NOW - 3600, "seen": NOW, "dwell": 60.0}
+    results.append(("a touched entry does not replay", state.effective_state(stale, NOW) == "idle"))
+
+    table = {14067: "claude-desktop"}
+    with procs(table):
+        stale["locator"] = {"claude_pid": 14067, "comm": "claude-desktop"}
+        results.append(("...but is still live", state.is_alive(stale, NOW)))
+
+        # And `seen` has to actually keep it alive, or the entry would be
+        # pruned once its report aged past the TTL.
+        old = {
+            "state": "idle", "ts": NOW - state.SESSION_TTL_SECONDS - 60, "seen": NOW,
+            "locator": {"claude_pid": 14067, "comm": "claude-desktop"},
+        }
+        results.append(("seen keeps an old report alive", state.is_alive(old, NOW)))
+    return results
+
+
 def notification_checks() -> list[tuple[str, bool]]:
     results = [
         ("reply -> done", desktop.classify("Claude", "Your response is ready") == "review"),
@@ -142,6 +200,7 @@ def main() -> int:
     groups = [
         ("origin", origin_checks()),
         ("liveness", liveness_checks()),
+        ("dwells", dwell_checks()),
         ("notifications", notification_checks()),
         ("jump", jump_checks()),
     ]

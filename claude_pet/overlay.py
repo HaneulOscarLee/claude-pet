@@ -446,6 +446,9 @@ class Overlay(Gtk.Window):
                 detail=detail,
                 cwd=DESKTOP_LABEL,
                 locator=desktop.locator(),
+                # Carried on the entry, because nothing will ever arrive to
+                # clear a state the app only announced once.
+                dwell=desktop.NOTIFY_DWELL_SECONDS.get(state_name),
             )
         except OSError:
             return
@@ -490,18 +493,22 @@ class Overlay(Gtk.Window):
             return
 
         known = state.read().get("sessions", {}).get(desktop.SESSION_ID)
-        fields: dict[str, Any] = {"cwd": DESKTOP_LABEL, "locator": desktop.locator()}
-        if isinstance(known, dict):
-            if now - self.desktop_written_at < DESKTOP_KEEPALIVE_SECONDS:
-                return
-            # `state` is left out on purpose. Passing it would stamp `idle` over
-            # a reply the app announced seconds ago; omitting it keeps whatever
-            # is stored and only refreshes the timestamp.
-        else:
-            fields["state"] = "idle"
-
         try:
-            state.update(desktop.SESSION_ID, **fields)
+            if isinstance(known, dict):
+                if now - self.desktop_written_at < DESKTOP_KEEPALIVE_SECONDS:
+                    return
+                # `touch`, not `update`: the entry only needs to stay alive.
+                # Re-reporting it would restart the dwell as well, and a reply
+                # the app announced an hour ago would come back to life every
+                # few minutes and sit there as "done" or "needs you".
+                state.touch(desktop.SESSION_ID)
+            else:
+                state.update(
+                    desktop.SESSION_ID,
+                    state="idle",
+                    cwd=DESKTOP_LABEL,
+                    locator=desktop.locator(),
+                )
         except OSError:
             return
         self.desktop_written_at = now

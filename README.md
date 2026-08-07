@@ -255,9 +255,14 @@ rather than hunting for a terminal that does not exist.
 side. The one signal the app emits is the desktop notification it posts when a
 reply arrives, so that is what the pet watches — which means:
 
-- you get **done** (or **needs you**, if the notification is asking for a
-  decision), held for the usual 20 seconds; you do **not** get **working**,
-  because nothing announces the start of a turn
+- you get **done** (20s) or **needs you** (60s, since it is the more urgent of
+  the two); you do **not** get **working**, because nothing announces the start
+  of a turn
+- both time out on their own, unlike the same states from a terminal session.
+  A session *reports* a state and keeps reporting it, so its **needs you** is
+  allowed to hold until Claude moves on. A notification is a one-off: nothing
+  will ever say the reply was read, so a state derived from one that did not
+  expire would simply stick
 - notifications only fire while the app's window is **unfocused**, which is
   exactly when a pet is worth glancing at, and never when you are already
   looking at the reply

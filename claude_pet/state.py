@@ -7,6 +7,7 @@ guarded by a short-lived lock file.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -139,8 +140,14 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
     and the pet would never notice everything had gone away. So the recorded
     Claude pid is verified directly: if that process is gone, so is the session.
     """
-    timestamp = session.get("ts")
-    if not isinstance(timestamp, (int, float)) or now - timestamp > SESSION_TTL_SECONDS:
+    # `seen` when there is one: an entry refreshed on a timer stays alive
+    # without its dwell being re-armed, which `ts` alone could not express.
+    stamps = [
+        value
+        for value in (session.get("ts"), session.get("seen"))
+        if isinstance(value, (int, float))
+    ]
+    if not stamps or now - max(stamps) > SESSION_TTL_SECONDS:
         return False
 
     locator = session.get("locator")
@@ -169,11 +176,12 @@ def _prune(sessions: dict[str, Any], now: float) -> None:
             sessions.pop(session_id, None)
 
 
-def update(session_id: str, **fields: Any) -> dict[str, Any]:
-    """Merge `fields` into `session_id`'s entry and persist.
+@contextlib.contextmanager
+def _locked() -> Any:
+    """Hold the state lock, stealing it if the holder appears to be gone.
 
-    A `state` of None removes the session. Contention is resolved by a lock
-    file with a hard timeout -- a stuck lock must never wedge a Claude turn.
+    A stuck lock must never wedge a Claude turn, so the wait has a hard
+    timeout and gives up in favour of writing anyway.
     """
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -189,11 +197,25 @@ def update(session_id: str, **fields: Any) -> dict[str, Any]:
             break
         except FileExistsError:
             if time.monotonic() > deadline:
-                # Assume the holder died; steal the lock rather than give up.
                 break
             time.sleep(0.01)
 
     try:
+        yield
+    finally:
+        if acquired or lock.exists():
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+
+def update(session_id: str, **fields: Any) -> dict[str, Any]:
+    """Merge `fields` into `session_id`'s entry and persist.
+
+    A `state` of None removes the session.
+    """
+    with _locked():
         data = read()
         sessions = data["sessions"]
         now = time.time()
@@ -205,17 +227,30 @@ def update(session_id: str, **fields: Any) -> dict[str, Any]:
             session = sessions.get(session_id) or {}
             session.update({key: value for key, value in fields.items() if value is not None})
             session["ts"] = now
+            session["seen"] = now
             sessions[session_id] = session
 
         data["updated"] = now
         _write(data)
         return data
-    finally:
-        if acquired or lock.exists():
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+
+
+def touch(session_id: str) -> None:
+    """Confirm a session still exists without re-reporting what it is doing.
+
+    Liveness and dwell both used to be read off `ts`, so keeping a long-lived
+    entry alive re-armed its dwell too and a one-off announcement replayed
+    forever -- the Claude Desktop entry, refreshed on a timer, would resurrect
+    a `needs you` from an hour earlier every few minutes. `seen` is the
+    liveness clock; `ts` stays the moment the state was actually reported.
+    """
+    with _locked():
+        data = read()
+        session = data["sessions"].get(session_id)
+        if not isinstance(session, dict):
+            return
+        session["seen"] = data["updated"] = time.time()
+        _write(data)
 
 
 def effective_state(session: dict[str, Any], now: float) -> str:
@@ -223,8 +258,16 @@ def effective_state(session: dict[str, Any], now: float) -> str:
     reported = session.get("state")
     if reported not in PRIORITY:
         return "idle"
-    dwell = DWELL_SECONDS.get(reported)
-    if dwell is not None and now - session["ts"] > dwell:
+
+    # A session may carry its own dwell. Claude Desktop's does: its states come
+    # from one-off notifications, so nothing will ever arrive to clear them and
+    # even `waiting` -- which a real session holds indefinitely, because it
+    # keeps re-reporting it -- has to time out on its own.
+    dwell = session.get("dwell")
+    if not isinstance(dwell, (int, float)):
+        dwell = DWELL_SECONDS.get(reported)
+
+    if dwell is not None and now - session.get("ts", 0.0) > dwell:
         return "idle"
     return reported
 

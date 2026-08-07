@@ -194,6 +194,18 @@ def locator() -> dict[str, Any]:
 
 # --------------------------------------------------------------- notifications
 
+#: How long a notification-derived state stays up, per state.
+#:
+#: A Claude Code session reports a *state* and keeps reporting it, so `waiting`
+#: is allowed to hold indefinitely -- a pet that stops asking for you defeats
+#: the point. A notification is an *edge*: the app says a reply arrived, and
+#: nothing will ever say it was read. Left on the shared dwell table a
+#: notification-derived `waiting` would latch on forever, so these override it.
+NOTIFY_DWELL_SECONDS: dict[str, float] = {
+    "review": 20.0,   # same as a finished turn anywhere else
+    "waiting": 60.0,  # longer, because it is the more urgent of the two
+}
+
 #: Summary/body words that mean the app wants a decision rather than merely
 #: reporting that a reply arrived. A heuristic, and treated as one: anything
 #: unrecognised falls through to "done", which is the common case and the
