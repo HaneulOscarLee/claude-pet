@@ -372,6 +372,27 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return cmd_run(args)
 
 
+def cmd_reset_position(_args: argparse.Namespace) -> int:
+    """Send the pet back to its anchor corner.
+
+    The shell-side twin of the tray's first menu item, and the answer when the
+    pet is somewhere it cannot be clicked: dragged onto a screen that has since
+    been unplugged, or buried under something full-screen.
+    """
+    config.update(position=None)
+    print("position cleared")
+
+    pid = _overlay_pid()
+    if pid is None:
+        print("the pet is not running; it will start in its corner")
+        return 0
+
+    # The running pet holds its position in memory, so the cleared setting only
+    # takes effect once it re-reads it.
+    print("restarting the pet...")
+    return cmd_restart(_args)
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Every change in what the pet showed, and what caused it.
 
@@ -726,6 +747,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         hint = "install wmctrl (or xdotool) to raise the terminal, or run Claude in tmux"
     optional("click-to-jump", bool(usable), hint)
+
+    from . import tray
+
+    optional(
+        "status-bar menu",
+        tray.available(),
+        "reset position and settings without touching the pet"
+        if tray.available()
+        else "install gir1.2-ayatanaappindicator3-0.1 — or use "
+             "`claude-pet reset-position` to recover a pet you cannot click",
+    )
 
     from . import desktop
 
@@ -1133,6 +1165,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("stop", help="stop the overlay").set_defaults(func=cmd_stop)
     subparsers.add_parser("status", help="show the current state and live sessions").set_defaults(func=cmd_status)
+    subparsers.add_parser(
+        "reset-position", help="send the pet back to its corner if you cannot find it"
+    ).set_defaults(func=cmd_reset_position)
     log_parser = subparsers.add_parser(
         "log", help="what the pet showed over time, and why"
     )

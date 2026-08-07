@@ -41,6 +41,10 @@ jobs:
       - name: Hook event tests
         run: python3 tests/test_hook.py
 
+      # Placement arithmetic, against a stand-in for the screen layout.
+      - name: Geometry tests
+        run: python3 tests/test_geometry.py
+
       - name: Bundled pack parses
         run: |
           python3 - <<'PY'

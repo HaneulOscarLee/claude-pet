@@ -28,6 +28,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 #   pillow  sprite decoding
 #   wmctrl  lets clicking the pet raise a terminal that is not running tmux
 #   notify  optional desktop notifications
+#   tray    optional status-bar menu, the way back to a pet you cannot click
 packages_for() {
     local manager="$1" item="$2"
     case "$manager:$item" in
@@ -35,18 +36,22 @@ packages_for() {
         apt:pillow)    echo "python3-pil" ;;
         apt:wmctrl)    echo "wmctrl" ;;
         apt:notify)    echo "libnotify-bin" ;;
+        apt:tray)      echo "gir1.2-ayatanaappindicator3-0.1" ;;
         dnf:gtk)       echo "python3-gobject gtk3" ;;
         dnf:pillow)    echo "python3-pillow" ;;
         dnf:wmctrl)    echo "wmctrl" ;;
         dnf:notify)    echo "libnotify" ;;
+        dnf:tray)      echo "libayatana-appindicator-gtk3" ;;
         pacman:gtk)    echo "python-gobject gtk3" ;;
         pacman:pillow) echo "python-pillow" ;;
         pacman:wmctrl) echo "wmctrl" ;;
         pacman:notify) echo "libnotify" ;;
+        pacman:tray)   echo "libayatana-appindicator" ;;
         zypper:gtk)    echo "python3-gobject gtk3" ;;
         zypper:pillow) echo "python3-Pillow" ;;
         zypper:wmctrl) echo "wmctrl" ;;
         zypper:notify) echo "libnotify-tools" ;;
+        zypper:tray)   echo "typelib-1_0-AyatanaAppIndicator3-0_1" ;;
     esac
 }
 
@@ -59,6 +64,8 @@ install_dependencies() {
     python3 -c 'import PIL' 2>/dev/null || missing+=(pillow)
     have wmctrl || have xdotool || missing+=(wmctrl)
     have notify-send || missing+=(notify)
+    python3 -c 'import gi; gi.require_version("AyatanaAppIndicator3", "0.1")' \
+        2>/dev/null || missing+=(tray)
     if [ ${#missing[@]} -eq 0 ]; then
         say "==> dependencies already present"
         return 0
@@ -75,7 +82,7 @@ install_dependencies() {
     done
     if [ -z "$manager" ]; then
         say "install: no known package manager; install these yourself:"
-        say "install:   PyGObject (GTK 3), Pillow, wmctrl, libnotify"
+        say "install:   PyGObject (GTK 3), Pillow, wmctrl, libnotify, app indicator"
         return 0
     fi
 

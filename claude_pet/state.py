@@ -366,9 +366,19 @@ def log_transition(previous: str, current: str, snapshot: dict[str, Any]) -> Non
     winner = snapshot.get("winner") or {}
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     detail = str(snapshot.get("detail") or "")
+
+    # A change has two possible causes, and naming the wrong one is worse than
+    # naming none: when a dwell runs out the last event is whatever came
+    # before, so reporting it reads as though that event caused this.
+    stored = winner.get("stored")
+    if stored and stored != current:
+        cause = f"{stored} expired"
+    else:
+        cause = str(winner.get("event") or "?")
+
     line = (
         f"{stamp}  {previous} -> {current}"
-        f"  via={winner.get('event') or '?'}"
+        f"  via={cause}"
         f"  session={str(winner.get('id') or '?')[:14]}"
         f"  sessions={snapshot.get('sessions', 0)}"
         + (f"  detail={detail!r}" if detail else "")
@@ -450,5 +460,12 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
         "since": winner.get("ts", now),
         # Which session is speaking, and what put it there. Only used for the
         # transition log, where "the pet says X" is useless without "because".
-        "winner": {"id": identifiers.get(id(winner)), "event": winner.get("event")},
+        # `stored` comes along so the log can tell an arriving event apart from
+        # a dwell simply running out -- otherwise a state that expired reads as
+        # though the last event caused it.
+        "winner": {
+            "id": identifiers.get(id(winner)),
+            "event": winner.get("event"),
+            "stored": winner.get("state"),
+        },
     }

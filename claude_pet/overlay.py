@@ -31,7 +31,7 @@ for _namespace, _version in (
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
-from . import config, desktop, jump, sprites, state  # noqa: E402
+from . import config, desktop, jump, sprites, state, tray  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
@@ -108,6 +108,16 @@ LABELS: dict[str, dict[str, str]] = {
         "dialog.cancel": "Cancel",
         "toast.installed": "installed {pet}",
         "toast.removed": "removed {pet}",
+        "toast.reset": "back to its corner",
+        "menu.pets": "Pets…",
+        "menu.language": "Language…",
+        "menu.reset": "Reset position",
+        "menu.back": "‹ Back",
+        "menu.settings": "Settings",
+        "lang.auto": "Automatic",
+        "lang.en": "English",
+        "lang.ko": "한국어",
+        "tray.show": "Where is it? (reset position)",
         "toast.failed": "failed: {reason}",
         "jump.hint": "click to jump",
     },
@@ -137,6 +147,16 @@ LABELS: dict[str, dict[str, str]] = {
         "dialog.cancel": "취소",
         "toast.installed": "{pet} 설치됨",
         "toast.removed": "{pet} 삭제됨",
+        "toast.reset": "제자리로 돌아왔어요",
+        "menu.pets": "펫 관리…",
+        "menu.language": "언어…",
+        "menu.reset": "위치 초기화",
+        "menu.back": "‹ 뒤로",
+        "menu.settings": "설정",
+        "lang.auto": "자동",
+        "lang.en": "English",
+        "lang.ko": "한국어",
+        "tray.show": "펫 어디감? (위치 초기화)",
         "toast.failed": "실패: {reason}",
         "jump.hint": "클릭하면 이동",
     },
@@ -147,7 +167,11 @@ LABELS: dict[str, dict[str, str]] = {
 #: `{tool}` is filled with the tool Claude is using, when there is one.
 PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
     "en": {
-        "idle": ("nothing running", "all quiet", "waiting for you"),
+        # Nothing here may sound like the pet wants something. `idle` used to
+        # offer "waiting for you", a hair away from `waiting`'s "needs you" --
+        # so the one state that means *nothing is happening* read as the one
+        # state that means *go and deal with this*.
+        "idle": ("nothing running", "all quiet", "nothing to do"),
         "running": ("working", "on it", "{tool}…", "busy with {tool}"),
         "waiting": ("needs you",),
         "review": ("done", "all yours", "have a look"),
@@ -155,10 +179,16 @@ PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
         "waving": ("hello", "session started"),
     },
     "ko": {
-        "idle": ("할 일 없음", "조용함", "기다리는 중"),
+        # Worse in Korean than in English: `idle` said 기다리는 중 and
+        # `waiting` says 입력 대기 -- both read as "waiting" at a glance, and
+        # they are opposites.
+        "idle": ("할 일 없음", "조용함", "쉬는 중"),
         "running": ("작업 중", "하는 중", "{tool} 중", "{tool} 돌리는 중"),
         "waiting": ("입력 대기",),
-        "review": ("응답 완료", "다 됐어요", "확인해 주세요"),
+        # Not 확인해 주세요: an imperative asking the user to go and do
+        # something, which is `waiting`'s job. `review` is only announcing that
+        # output exists.
+        "review": ("응답 완료", "다 됐어요", "결과 나왔어요"),
         "failed": ("실패했어요", "뭔가 깨졌어요"),
         "waving": ("안녕", "세션 시작"),
     },
@@ -281,6 +311,7 @@ class Overlay(Gtk.Window):
         self.desktop_checked_at = 0.0
         self.desktop_written_at = 0.0
         self.cpu_sampled_at = 0.0
+        self.tray: tray.Tray | None = None
         # A short-lived bubble override, for telling the user how a click went.
         self.flash_text = ""
         self.flash_until = 0.0
@@ -305,7 +336,12 @@ class Overlay(Gtk.Window):
         self.window_width = max(view.width, BUBBLE_WIDTH)
         self.window_height = view.height + BUBBLE_GAP + 78
         self.sprite_left = (self.window_width - view.width) // 2
-        self.sprite_top = self.window_height - view.height
+        #: Room the bubble needs, on whichever side of the sprite it is on.
+        self.bubble_space = self.window_height - view.height
+        self.bubble_below = False
+        self.sprite_top = self.bubble_space
+        #: Offset from the pointer to the sprite's corner, held during a drag.
+        self.drag_offset: tuple[int, int] | None = None
 
         self._configure_window()
         self._place_initial()
@@ -331,6 +367,7 @@ class Overlay(Gtk.Window):
             GLib.timeout_add(POLL_INTERVAL_MS, self._poll_state)
             self._schedule_update_check()
             self._start_desktop_watch()
+            self._start_tray()
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -355,28 +392,153 @@ class Overlay(Gtk.Window):
         if visual is not None:
             self.set_visual(visual)
 
-    def _workarea(self) -> Gdk.Rectangle:
+    # ------------------------------------------------------------- geometry
+    #
+    # Everything here reasons about where the *sprite* is, not where the window
+    # is. They are not the same: the window reserves room for the bubble, so
+    # the visible pet sits inset from the window it lives in, and using window
+    # coordinates for questions about the pet gets the answer wrong by that
+    # inset -- most visibly at the top of the screen.
+
+    @property
+    def sprite_x(self) -> int:
+        return self.pos_x + self.sprite_left
+
+    @property
+    def sprite_y(self) -> int:
+        return self.pos_y + self.sprite_top
+
+    def _monitors(self) -> list[Gdk.Rectangle]:
         display = Gdk.Display.get_default()
-        monitor = display.get_primary_monitor() or display.get_monitor(0)
-        return monitor.get_workarea()
+        areas = []
+        for index in range(display.get_n_monitors()):
+            monitor = display.get_monitor(index)
+            if monitor is not None:
+                areas.append(monitor.get_workarea())
+        if not areas:
+            monitor = display.get_primary_monitor() or display.get_monitor(0)
+            areas.append(monitor.get_workarea())
+        return areas
+
+    def _workarea_for_sprite(self, x: int | None = None, y: int | None = None) -> Gdk.Rectangle:
+        """Work area of the screen the pet is on, not always the primary one.
+
+        Answering "primary" regardless meant the walk bounds dragged a pet on
+        the second screen back across the seam, and a position remembered on a
+        screen since unplugged was clamped against a rectangle it was nowhere
+        near -- which is one of the ways the pet became unreachable.
+        """
+        x = self.sprite_x if x is None else x
+        y = self.sprite_y if y is None else y
+        centre_x = x + self.view.width // 2
+        centre_y = y + self.view.height // 2
+        monitors = self._monitors()
+        for area in monitors:
+            if (area.x <= centre_x < area.x + area.width
+                    and area.y <= centre_y < area.y + area.height):
+                return area
+
+        # Past every edge -- being dragged out of the far side of a screen.
+        # The nearest one, not the primary: falling back to primary teleported
+        # a pet leaving the right of the second monitor onto the first.
+        def distance(area: Gdk.Rectangle) -> float:
+            dx = max(area.x - centre_x, 0, centre_x - (area.x + area.width))
+            dy = max(area.y - centre_y, 0, centre_y - (area.y + area.height))
+            return math.hypot(dx, dy)
+
+        return min(monitors, key=distance)
+
+    def _workarea(self) -> Gdk.Rectangle:
+        return self._workarea_for_sprite()
+
+    def _on_screen(self, x: int, y: int) -> bool:
+        """Whether a sprite placed here would be visible on some monitor.
+
+        Asked of a remembered position before trusting it: screens get
+        unplugged and resolutions change, and a pet restored onto a screen that
+        is no longer there is a pet with no way back.
+        """
+        for area in self._monitors():
+            if (x + self.view.width > area.x and x < area.x + area.width
+                    and y + self.view.height > area.y and y < area.y + area.height):
+                return True
+        return False
+
+    def _set_bubble_side(self, below: bool) -> None:
+        """Put the bubble under the sprite instead of over it, or back again."""
+        if below == self.bubble_below:
+            return
+        self.bubble_below = below
+        self.sprite_top = 0 if below else self.bubble_space
+        self._apply_input_shape()
+        self.queue_draw()
+
+    def _place_sprite(self, x: int, y: int) -> None:
+        """Put the *sprite* here, and work out where the window has to go.
+
+        The window is taller than the sprite because the bubble needs somewhere
+        to live, and that room used to be above it unconditionally. So the
+        window's top met the panel while the sprite was still 86 pixels short
+        of it, and the pet could not be moved any higher however hard you
+        pulled. When there is no room above, the bubble goes below instead and
+        the sprite reaches the top of the screen.
+        """
+        area = self._workarea_for_sprite(x, y)
+        x = min(max(x, area.x), area.x + area.width - self.view.width)
+        y = min(max(y, area.y), area.y + area.height - self.view.height)
+
+        self._set_bubble_side(y - area.y < self.bubble_space)
+        self.pos_x = x - self.sprite_left
+        self.pos_y = y - self.sprite_top
+        self.move(self.pos_x, self.pos_y)
+
+    def _anchored_sprite(self) -> tuple[int, int]:
+        area = self._monitors()[0]
+        anchor = str(self.settings.get("anchor") or "bottom-right")
+        if anchor.endswith("left"):
+            x = area.x + EDGE_MARGIN
+        else:
+            x = area.x + area.width - EDGE_MARGIN - self.view.width
+        if anchor.startswith("top"):
+            y = area.y + EDGE_MARGIN
+        else:
+            y = area.y + area.height - EDGE_MARGIN - self.view.height
+        return x, y
 
     def _place_initial(self) -> None:
-        area = self._workarea()
         stored = self.settings.get("position")
+        x = y = None
         if isinstance(stored, (list, tuple)) and len(stored) == 2:
-            x, y = int(stored[0]), int(stored[1])
-        else:
-            anchor = str(self.settings.get("anchor") or "bottom-right")
-            y = area.y + area.height - self.window_height - EDGE_MARGIN
-            if anchor.endswith("left"):
-                x = area.x + EDGE_MARGIN
-            else:
-                x = area.x + area.width - self.window_width - EDGE_MARGIN
-            if anchor.startswith("top"):
-                y = area.y + EDGE_MARGIN
+            try:
+                x, y = int(stored[0]), int(stored[1])
+            except (TypeError, ValueError):
+                x = y = None
 
-        self.pos_x, self.pos_y = x, y
-        self.move(x, y)
+        # Stored positions are the window's corner, for compatibility with what
+        # earlier versions wrote; the sprite is what has to land on a screen.
+        if x is not None and self._on_screen(x + self.sprite_left, y + self.bubble_space):
+            self._place_sprite(x + self.sprite_left, y + self.bubble_space)
+            return
+        if x is not None:
+            # Forgotten, not just ignored, or the warning repeats on every
+            # start and the pet keeps being restored from a bad memory.
+            print("claude-pet: remembered position is off screen, re-anchoring", flush=True)
+            self.settings["position"] = None
+            config.update(position=None)
+        self._place_sprite(*self._anchored_sprite())
+
+    def reset_position(self) -> None:
+        """Forget where the pet was dragged and send it back to its corner.
+
+        The way out of "it wandered onto a screen that is no longer there".
+        Reachable without touching the pet, which is the whole point: from the
+        tray icon, or `claude-pet reset-position`.
+        """
+        self.settings["position"] = None
+        config.update(position=None)
+        self._halt_walk()
+        self._place_sprite(*self._anchored_sprite())
+        self._flash(self.labels["toast.reset"])
 
     def _apply_input_shape(self) -> None:
         """Only the sprite (and a visible bubble) should swallow clicks."""
@@ -385,20 +547,28 @@ class Overlay(Gtk.Window):
             return
         import cairo
 
-        # Only the sprite takes clicks. The bubble is on screen most of the time
-        # now, and a talkative pet must not become a 260px dead zone over
-        # whatever is underneath it.
-        region = cairo.Region(
-            cairo.RectangleInt(self.sprite_left, self.sprite_top, self.view.width, self.view.height)
-        )
+        if self.dragging:
+            # The whole window, so a pointer that gets slightly ahead of the
+            # pet keeps sending motion events instead of dropping it.
+            region = cairo.Region(
+                cairo.RectangleInt(0, 0, self.window_width, self.window_height)
+            )
+        else:
+            # Only the sprite takes clicks. The bubble is on screen most of the
+            # time now, and a talkative pet must not become a 260px dead zone
+            # over whatever is underneath it.
+            region = cairo.Region(
+                cairo.RectangleInt(
+                    self.sprite_left, self.sprite_top, self.view.width, self.view.height
+                )
+            )
         window.input_shape_combine_region(region, 0, 0)
 
-    def _on_configure(self, _widget, event) -> bool:
-        # Only a deliberate drag should move the pet's home. Walk steps and the
-        # initial anchored placement must not become sticky state.
-        if self.dragging and not self.walking:
-            self.pos_x, self.pos_y = int(event.x), int(event.y)
-            self.settings["position"] = [self.pos_x, self.pos_y]
+    def _on_configure(self, _widget, _event) -> bool:
+        # Position is owned here now, not read back from the compositor: the
+        # drag places the sprite directly, and reading the window's corner back
+        # accumulated the frame-vs-client offset that used to walk the pet off
+        # the bottom of the screen.
         return False
 
     # ----------------------------------------------------------------- state
@@ -412,6 +582,137 @@ class Overlay(Gtk.Window):
         self._adopt(snapshot)
         self._maybe_exit(snapshot)
         return True
+
+    # ------------------------------------------------------------------ tray
+
+    def _tray_icon_path(self) -> str | None:
+        """Write the pet's own face out for the status bar to use.
+
+        An icon *name* is what the indicator wants, resolved through an icon
+        theme, and only the packaged install puts one there. Writing the sprite
+        into a directory of our own and pointing the indicator at it works for
+        every install shape -- and the icon is then the pet you actually have.
+        """
+        directory = state.state_dir() / "tray"
+        target = directory / "claude-pet.png"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            frames = self.view.animations.get("idle") or []
+            if not frames:
+                return None
+            # 22px is the conventional status-icon size; the shell scales it.
+            frames[0].scale_simple(22, 22, GdkPixbuf.InterpType.BILINEAR).savev(
+                str(target), "png", [], []
+            )
+        except (OSError, GLib.Error) as exc:
+            trace(f"tray icon: {exc}")
+            return None
+        return str(directory)
+
+    def _start_tray(self) -> None:
+        if self.tray is not None or not tray.available():
+            if self.tray is None:
+                trace("no tray bindings; reset position via `claude-pet reset-position`")
+            return
+
+        path = self._tray_icon_path()
+        indicator = tray.Tray("claude-pet", "claude-pet")
+        if path is not None:
+            indicator.icon_theme_path = path
+        if indicator.start(self._build_tray_menu):
+            self.tray = indicator
+            trace("tray icon shown")
+        else:
+            trace(f"no tray icon: {indicator.error}")
+
+    def _refresh_tray(self) -> None:
+        if self.tray is not None:
+            self.tray.set_menu(self._build_tray_menu())
+
+    def _build_tray_menu(self):
+        """The same controls as the right-click menu, in a real Gtk.Menu.
+
+        A GtkMenu is right here and wrong on the pet: the shell owns this one
+        and dismisses it, whereas the pet's own popup had to be an ordinary
+        window to ever close on an outside click.
+        """
+        menu = Gtk.Menu()
+
+        def add(label: str, callback, *, parent=None, checked: bool | None = None):
+            if checked is None:
+                item = Gtk.MenuItem(label=label)
+            else:
+                item = Gtk.CheckMenuItem(label=label)
+                item.set_active(checked)
+            item.connect("activate", callback)
+            (parent or menu).append(item)
+            return item
+
+        def separator(parent=None) -> None:
+            (parent or menu).append(Gtk.SeparatorMenuItem())
+
+        # First, and deliberately: this is the reason the tray exists.
+        add(self.labels["tray.show"], lambda *_: self.reset_position())
+        separator()
+
+        pets = Gtk.Menu()
+        pets_item = Gtk.MenuItem(label=self.labels["menu.pets"].rstrip("…"))
+        pets_item.set_submenu(pets)
+        menu.append(pets_item)
+        for pet_id in config.discover():
+            def pick(_item, chosen=pet_id) -> None:
+                if chosen == self.view.pet.id:
+                    return
+                self.settings["pet"] = chosen
+                config.update(pet=chosen)
+                self.quit(restart=True)
+
+            add(pet_id, pick, parent=pets, checked=pet_id == self.view.pet.id)
+        separator(pets)
+        add(self.labels["menu.browse"], lambda *_: self._open_gallery(), parent=pets)
+        add(self.labels["menu.install"], lambda *_: self._install_pack(), parent=pets)
+        add(self.labels["menu.remove"], lambda *_: self._remove_pack(), parent=pets)
+
+        languages = Gtk.Menu()
+        language_item = Gtk.MenuItem(label=self.labels["menu.language"].rstrip("…"))
+        language_item.set_submenu(languages)
+        menu.append(language_item)
+        current = str(self.settings.get("language") or "auto")
+        for code in ("auto", "en", "ko"):
+            def choose(_item, chosen=code) -> None:
+                if chosen == str(self.settings.get("language") or "auto"):
+                    return
+                self._apply_language(chosen)
+                self._refresh_tray()
+
+            add(self.labels[f"lang.{code}"], choose, parent=languages, checked=code == current)
+
+        separator()
+        toggles = [
+            ("walk", self.labels["menu.walk"], True),
+            ("notifications", self.labels["menu.notify"], False),
+            ("autostart", self.labels["menu.autostart"], True),
+            ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
+        ]
+        if desktop.installed():
+            toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
+        for key, label, default in toggles:
+            def toggle(item, name=key) -> None:
+                wanted = bool(item.get_active())
+                if wanted == bool(self.settings.get(name)):
+                    return  # set_active during a rebuild, not a click
+                self.settings[name] = wanted
+                config.update(**{name: wanted})
+                if name == "desktop":
+                    self._apply_desktop_setting()
+
+            add(label, toggle, checked=bool(self.settings.get(key, default)))
+
+        separator()
+        add(self.labels["menu.quit"], lambda *_: self.quit())
+
+        menu.show_all()
+        return menu
 
     def _sample_cpu(self) -> None:
         """Watch what the session processes are actually doing.
@@ -481,6 +782,8 @@ class Overlay(Gtk.Window):
             self.desktop_checked_at = 0.0
             self.desktop_written_at = 0.0
             self._start_desktop_watch()
+            # The toggle's own row is in the tray menu, so it has to redraw.
+            self._refresh_tray()
             return
 
         self._stop_desktop_watch()
@@ -491,6 +794,7 @@ class Overlay(Gtk.Window):
             state.update(desktop.SESSION_ID, state=None)
         except OSError:
             pass
+        self._refresh_tray()
 
     def _refresh_desktop(self) -> None:
         """Keep the app's entry in the state file in step with the app itself.
@@ -668,18 +972,16 @@ class Overlay(Gtk.Window):
         if not self.walking:
             return
 
-        # Bounds keep the *sprite* inside the workarea; the window is wider
-        # than the sprite because of the bubble, and that padding is invisible.
+        # Bounds are the sprite's, on whichever monitor it is currently on.
         area = self._workarea()
-        left_bound = area.x + EDGE_MARGIN - self.sprite_left
-        right_bound = area.x + area.width - EDGE_MARGIN - self.sprite_left - self.view.width
+        left_bound = area.x + EDGE_MARGIN
+        right_bound = area.x + area.width - EDGE_MARGIN - self.view.width
         step = max(1, int(self.settings.get("walk_speed") or 3))
-        new_x = self.pos_x + step * self.walking
+        new_x = self.sprite_x + step * self.walking
         if new_x <= left_bound or new_x >= right_bound:
             self.walking *= -1
             self.visual_state = "running-right" if self.walking > 0 else "running-left"
-        self.pos_x = min(max(new_x, left_bound), right_bound)
-        self.move(self.pos_x, self.pos_y)
+        self._place_sprite(min(max(new_x, left_bound), right_bound), self.sprite_y)
 
     def _update_look(self) -> None:
         """Face the pointer while idle, using the v2 look sweep."""
@@ -785,7 +1087,14 @@ class Overlay(Gtk.Window):
         box_width = min(BUBBLE_WIDTH, logical.width + 24)
         box_height = logical.height + 16
         box_x = (self.window_width - box_width) / 2
-        box_y = max(0, self.sprite_top - BUBBLE_GAP - box_height)
+        if self.bubble_below:
+            # No room overhead -- the pet is at the top of the screen.
+            box_y = min(
+                self.sprite_top + self.view.height + BUBBLE_GAP,
+                self.window_height - box_height,
+            )
+        else:
+            box_y = max(0, self.sprite_top - BUBBLE_GAP - box_height)
 
         radius = 10
         cr.new_sub_path()
@@ -841,14 +1150,33 @@ class Overlay(Gtk.Window):
         )
 
     def _on_motion(self, _widget, event) -> bool:
-        if self.press_origin is None:
-            return False
-        start_x, start_y = self.press_origin
-        if math.hypot(event.x_root - start_x, event.y_root - start_y) < DRAG_THRESHOLD:
-            return False
-        self.press_origin = None
-        self.dragging = True
-        self.begin_move_drag(1, start_x, start_y, event.time)
+        """Carry the pet with the pointer.
+
+        Done here rather than handing the window to the compositor with
+        `begin_move_drag`, because the compositor moves the *window* and keeps
+        it on screen -- so the pet stopped 86 pixels short of the top, that
+        being the room the bubble takes up above it. Placing the sprite
+        ourselves lets the bubble move to the other side at the same instant,
+        with no jump, and keeps the pet on whichever monitor it is over.
+
+        No pointer grab is taken. If the pointer outruns the pet the drag
+        simply stops, which is a great deal better than a grab that escapes.
+        """
+        if not self.dragging:
+            if self.press_origin is None:
+                return False
+            start_x, start_y = self.press_origin
+            if math.hypot(event.x_root - start_x, event.y_root - start_y) < DRAG_THRESHOLD:
+                return False
+            self.press_origin = None
+            self.dragging = True
+            self.drag_offset = (int(start_x) - self.sprite_x, int(start_y) - self.sprite_y)
+            # Widen the target while dragging: the sprite is a small thing to
+            # keep a pointer inside, and losing it mid-drag drops the pet.
+            self._apply_input_shape()
+
+        offset_x, offset_y = self.drag_offset or (0, 0)
+        self._place_sprite(int(event.x_root) - offset_x, int(event.y_root) - offset_y)
         return True
 
     def _on_button_release(self, _widget, event) -> bool:
@@ -858,10 +1186,18 @@ class Overlay(Gtk.Window):
             self.press_origin = None
             self._on_click()
         elif self.dragging:
-            self.dragging = False
-            self._halt_walk()  # settle where it was dropped before wandering on
-            config.update(position=self.settings.get("position"))
+            self._end_drag()
         return False
+
+    def _end_drag(self) -> None:
+        self.dragging = False
+        self.drag_offset = None
+        self._apply_input_shape()
+        self._halt_walk()  # settle where it was dropped before wandering on
+        # Stored as the window corner, which is what earlier versions wrote and
+        # what `_place_initial` still reads.
+        self.settings["position"] = [self.pos_x, self.pos_y]
+        config.update(position=self.settings["position"])
 
     def _on_click(self) -> None:
         """Take me to the session, or toggle the bubble if there is none.
@@ -939,47 +1275,108 @@ class Overlay(Gtk.Window):
         box.set_margin_bottom(4)
         frame.add(box)
         popup.add(frame)
+        popup.menu_box = box  # the page builders rebuild this in place
+
+        self._render_page(popup, "main", event)
+
+        popup.connect("focus-out-event", lambda *_: (self._dismiss(popup), False)[1])
+        popup.connect(
+            "key-press-event",
+            lambda _w, key_event: (
+                self._dismiss(popup) or True if key_event.keyval == Gdk.KEY_Escape else False
+            ),
+        )
+
+        self.menu = popup
+        self.menu_opened_at = time.monotonic()
+        trace(f"menu popped, xid={_xid(popup)}")
+
+    # ------------------------------------------------------------ menu pages
+    #
+    # Pages rather than submenus. Everything used to be one list, and with a
+    # dozen packs installed the packs were most of it -- the settings were off
+    # the bottom of a menu that existed to reach them. Nested popup windows
+    # would each need their own dismissal handling, which took long enough to
+    # get right once, so a page swaps the contents of the window already open.
+
+    def _render_page(self, popup, page: str, event=None) -> None:
+        box = popup.menu_box
+        for child in box.get_children():
+            box.remove(child)
 
         def close(*_args) -> None:
             self._dismiss(popup)
 
-        header = Gtk.Label(label=f"{self.view.pet.display_name} · v{self.view.pet.version}")
-        header.set_sensitive(False)
-        header.set_margin_start(12)
-        header.set_margin_end(12)
-        header.set_margin_bottom(4)
-        header.set_alignment(0.0, 0.5)
-        box.pack_start(header, False, False, 0)
-        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+        def go(target: str):
+            return lambda *_a: self._render_page(popup, target)
 
-        for pet_id in config.discover():
-            def pick(_button, chosen=pet_id) -> None:
-                close()
-                self.settings["pet"] = chosen
-                config.update(pet=chosen)
-                self.quit(restart=True)
-
+        def separator() -> None:
             box.pack_start(
-                self._menu_row(pet_id, pick, active=pet_id == self.view.pet.id), False, False, 0
+                Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2
             )
 
-        def browse(_button) -> None:
-            close()
-            self._open_gallery()
+        def caption(text: str) -> None:
+            label = Gtk.Label(label=text)
+            label.set_sensitive(False)
+            label.set_margin_start(12)
+            label.set_margin_end(12)
+            label.set_margin_bottom(4)
+            label.set_alignment(0.0, 0.5)
+            box.pack_start(label, False, False, 0)
 
-        box.pack_start(self._menu_row(self.labels["menu.browse"], browse), False, False, 0)
-        box.pack_start(
-            self._menu_row(
-                self.labels["menu.install"], lambda _b: (close(), self._install_pack())
-            ),
-            False, False, 0,
-        )
-        box.pack_start(
-            self._menu_row(self.labels["menu.remove"], lambda _b: (close(), self._remove_pack())),
-            False, False, 0,
-        )
-        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+        def row(label: str, callback, *, active: bool | None = None) -> None:
+            box.pack_start(self._menu_row(label, callback, active=active), False, False, 0)
 
+        if page == "main":
+            caption(f"{self.view.pet.display_name} · v{self.view.pet.version}")
+            separator()
+            row(self.labels["menu.pets"], go("pets"))
+            row(self.labels["menu.language"], go("language"))
+            separator()
+            self._pack_toggles(row, close)
+            separator()
+            row(self.labels["menu.reset"], lambda *_: (close(), self.reset_position()))
+            box.pack_start(self._update_row(close), False, False, 0)
+            row(self.labels["menu.quit"], lambda *_: (close(), self.quit()))
+
+        elif page == "pets":
+            row(self.labels["menu.back"], go("main"))
+            separator()
+            for pet_id in config.discover():
+                def pick(_button, chosen=pet_id) -> None:
+                    close()
+                    self.settings["pet"] = chosen
+                    config.update(pet=chosen)
+                    self.quit(restart=True)
+
+                row(pet_id, pick, active=pet_id == self.view.pet.id)
+            separator()
+            row(self.labels["menu.browse"], lambda *_: (close(), self._open_gallery()))
+            row(self.labels["menu.install"], lambda *_: (close(), self._install_pack()))
+            row(self.labels["menu.remove"], lambda *_: (close(), self._remove_pack()))
+
+        elif page == "language":
+            row(self.labels["menu.back"], go("main"))
+            separator()
+            current = str(self.settings.get("language") or "auto")
+            for code in ("auto", "en", "ko"):
+                def choose(_button, chosen=code) -> None:
+                    close()
+                    self._apply_language(chosen)
+
+                row(self.labels[f"lang.{code}"], choose, active=code == current)
+
+        popup.show_all()
+        # The page just changed shape; let the window shrink to fit it again
+        # rather than keep the tallest page's height.
+        popup.resize(1, 1)
+        self._place_menu(popup, event)
+        popup.present()
+        surface = popup.get_window()
+        if surface is not None:
+            surface.raise_()
+
+    def _pack_toggles(self, row, close) -> None:
         toggles = [
             ("walk", self.labels["menu.walk"], True),
             ("notifications", self.labels["menu.notify"], False),
@@ -999,36 +1396,22 @@ class Overlay(Gtk.Window):
                     self._apply_desktop_setting()
                 close()
 
-            box.pack_start(
-                self._menu_row(label, toggle, active=bool(self.settings.get(key, default))),
-                False, False, 0,
-            )
+            row(label, toggle, active=bool(self.settings.get(key, default)))
 
-        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
-        box.pack_start(self._update_row(close), False, False, 0)
-        box.pack_start(
-            self._menu_row(self.labels["menu.quit"], lambda *_: (close(), self.quit())),
-            False, False, 0,
-        )
+    def _apply_language(self, choice: str) -> None:
+        """Switch the bubble's language without a restart.
 
-        popup.connect("focus-out-event", lambda *_: (close(), False)[1])
-        popup.connect(
-            "key-press-event",
-            lambda _w, key_event: (
-                close() or True if key_event.keyval == Gdk.KEY_Escape else False
-            ),
-        )
-
-        popup.show_all()
-        self._place_menu(popup, event)
-        popup.present()
-        surface = popup.get_window()
-        if surface is not None:
-            surface.raise_()
-
-        self.menu = popup
-        self.menu_opened_at = time.monotonic()
-        trace(f"menu popped, xid={_xid(popup)}")
+        Only the label and phrase tables depend on it, and both are re-read
+        here -- a restart would cost the pet its place on screen and its
+        current state for what is a change of vocabulary.
+        """
+        self.settings["language"] = choice
+        config.update(language=choice)
+        self.labels = resolve_labels(choice)
+        self.phrases = resolve_phrases(choice)
+        options = self.phrases.get(self.state) or (self.labels.get(self.state, self.state),)
+        self.phrase = random.choice(options)
+        self.queue_draw()
 
     # ------------------------------------------------------- pack management
 
@@ -1250,10 +1633,20 @@ class Overlay(Gtk.Window):
         """Put the popup above the pet, kept inside the work area."""
         width, height = popup.get_size()
         area = self._workarea()
-        x = int(getattr(event, "x_root", self.pos_x)) - width // 2
-        y = self.pos_y + self.sprite_top - height - 4
+        if event is None and getattr(popup, "menu_x", None) is not None:
+            # A page change, not a fresh right-click. Re-centring on the pointer
+            # would shuffle the window sideways under the hand about to click.
+            x = popup.menu_x
+        else:
+            x = int(getattr(event, "x_root", self.sprite_x)) - width // 2
+        y = self.sprite_y - height - 4
+        if y < area.y:
+            # No room above -- the pet is at the top of the screen. Better
+            # under it than pinned to the panel and covering the pet.
+            y = self.sprite_y + self.view.height + 4
         x = min(max(x, area.x), area.x + area.width - width)
         y = min(max(y, area.y), area.y + area.height - height)
+        popup.menu_x = x
         popup.move(x, y)
 
     def _dismiss(self, popup) -> None:
@@ -1276,6 +1669,9 @@ class Overlay(Gtk.Window):
 
     def quit(self, restart: bool = False) -> None:
         self._stop_desktop_watch()
+        if self.tray is not None:
+            self.tray.stop()
+            self.tray = None
         try:
             state.pid_path().unlink()
         except OSError:

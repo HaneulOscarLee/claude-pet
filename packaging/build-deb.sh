@@ -76,7 +76,7 @@ Architecture: all
 Maintainer: haneullee <noreply@users.noreply.github.com>
 Installed-Size: $INSTALLED_SIZE
 Depends: python3 (>= 3.10), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, python3-pil
-Recommends: wmctrl, libnotify-bin
+Recommends: wmctrl, libnotify-bin, gir1.2-ayatanaappindicator3-0.1
 Suggests: tmux
 Homepage: https://github.com/HaneulOscarLee/claude-pet
 Description: Desktop pet that shows what Claude Code is doing

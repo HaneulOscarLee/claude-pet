@@ -385,6 +385,7 @@ claude-pet restart              # after changing the pack or settings
 claude-pet stop
 claude-pet status               # current state and every live session
 claude-pet log                  # what it showed over time, and why
+claude-pet reset-position       # send it back to its corner if you cannot find it
 ```
 
 ```console
@@ -473,10 +474,16 @@ so this is how you get a picture of the window.
 | drag | move the pet — mid-stride is fine; it stops the moment you grab it |
 | right-click | everything below, without a terminal |
 
+Drag it anywhere on any screen, right up to the top edge: the pet keeps the
+bubble above itself normally and puts it underneath when there is no room, so
+what stops at the edge of the screen is the pet rather than the invisible box
+it is drawn in. It stays on whichever monitor you drop it on.
+
 The right-click menu covers day-to-day use on its own: switch pack, browse the
 gallery, install a pet (paste its id or just its gallery link), remove the
-current one, toggle wandering / notifications / start-with-Claude /
-quit-when-no-sessions, check for and apply updates, and quit. The version is
+current one, change language, toggle wandering / notifications / follow-Claude-
+Desktop / start-with-Claude / quit-when-no-sessions, reset position, check for
+and apply updates, and quit. The version is
 checked in the background 20 seconds after start and every six hours after that
 — `claude-pet set update_check false` turns that off.
 
@@ -493,6 +500,55 @@ precisely the problem: focus cannot move while it is held, so no focus-out ever
 arrives, and a click landing on a Wayland surface never reaches an XWayland grab
 either. An ordinary focusable window is managed by the compositor and gets
 focus-out from any click, on either kind of surface.
+
+### The menu
+
+Right-click the pet. It opens on a short page rather than one long list —
+with a dozen packs installed the packs *were* the menu, and the settings sat
+off the bottom of the thing you opened to reach them.
+
+```
+clawd · v2
+──────────────
+Pets…                 →  pick one · browse the gallery · install · remove
+Language…             →  automatic · English · 한국어
+──────────────
+Wander around              ✓
+Desktop notifications
+Follow Claude Desktop      ✓
+Start with Claude          ✓
+Quit when no sessions      ✓
+──────────────
+Reset position
+Up to date
+Quit
+```
+
+Language takes effect immediately — the pet keeps its place and its state,
+since only its vocabulary changed. Picking a different pack restarts it,
+because the sprites have to be reloaded.
+
+### When you cannot find the pet
+
+Everything above goes *through* the pet, which is no help when the pet is
+somewhere you cannot click — dragged onto a second screen that has since been
+unplugged, or buried under something full-screen. So the same controls also
+live in the status bar, where they cannot wander off, with **reset position**
+at the top.
+
+That needs `gir1.2-ayatanaappindicator3-0.1` (installed by `install.sh` and
+recommended by the `.deb`) and, on GNOME, an extension that shows tray icons —
+Ubuntu ships one enabled. `claude-pet doctor` says whether you have it.
+
+Failing all of that, from any shell:
+
+```bash
+claude-pet reset-position
+```
+
+The pet also checks its remembered position at startup and re-anchors if that
+place is no longer on any screen, so a pet lost with the monitor it was on
+comes back by itself next time it starts.
 
 ### Jumping back to a session
 
