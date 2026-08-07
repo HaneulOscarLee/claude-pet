@@ -138,6 +138,17 @@ def _update_tarball(root: Path) -> tuple[str, str]:
     return before, after
 
 
+def check() -> dict[str, str | bool]:
+    """Installed vs latest, without touching anything.
+
+    Raises UpdateError if GitHub cannot be reached, so callers can tell "no
+    update" apart from "could not look".
+    """
+    current = installed_version()
+    latest = latest_sha()[:7]
+    return {"current": current, "latest": latest, "available": current != latest}
+
+
 def update(check_only: bool = False) -> int:
     root = install_root()
     current = installed_version()

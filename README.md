@@ -330,6 +330,7 @@ claude-pet set position none          # forget a dragged position, re-anchor
 | `notifications` | `false` | also send a desktop notification |
 | `look_at_mouse` | `true` | v2 packs: face the pointer while idle |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
+| `update_check` | `true` | look for a newer version in the background |
 | `exit_when_no_sessions` | `true` | quit once every Claude session has ended |
 | `exit_grace_seconds` | `30` | how long to wait first, in case one reopens |
 | `position` | `null` | remembered drag position |
@@ -355,7 +356,14 @@ so this is how you get a picture of the window.
 |---|---|
 | click | **jump to that session** (see below), or pin the bubble if there is nowhere to jump |
 | drag | move the pet — mid-stride is fine; it stops the moment you grab it |
-| right-click | switch pack; open the gallery; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
+| right-click | everything below, without a terminal |
+
+The right-click menu covers day-to-day use on its own: switch pack, browse the
+gallery, install a pet (paste its id or just its gallery link), remove the
+current one, toggle wandering / notifications / start-with-Claude /
+quit-when-no-sessions, check for and apply updates, and quit. The version is
+checked in the background 20 seconds after start and every six hours after that
+— `claude-pet set update_check false` turns that off.
 
 Clicks land only on the sprite itself — the rest of the window is
 click-through, so the pet never steals a click meant for what is underneath.

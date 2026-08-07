@@ -13,6 +13,7 @@ import random
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -80,8 +81,21 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
         "menu.exit_idle": "Quit when no sessions",
-        "menu.browse": "Get more pets…",
+        "menu.browse": "Browse the gallery…",
+        "menu.install": "Install a pet…",
+        "menu.remove": "Remove this pet…",
+        "menu.update_check": "Check for updates…",
+        "menu.update_current": "Up to date",
+        "menu.update_available": "Update to {version}",
+        "menu.updating": "updating…",
         "menu.quit": "Quit",
+        "dialog.install": "Pet id, or a codex-pets.net link:",
+        "dialog.remove": "Remove {pet}? It can be installed again from the gallery.",
+        "dialog.ok": "OK",
+        "dialog.cancel": "Cancel",
+        "toast.installed": "installed {pet}",
+        "toast.removed": "removed {pet}",
+        "toast.failed": "failed: {reason}",
         "jump.hint": "click to jump",
     },
     "ko": {
@@ -95,8 +109,21 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
         "menu.exit_idle": "세션 없으면 종료",
-        "menu.browse": "펫 더 받기…",
+        "menu.browse": "갤러리 열기…",
+        "menu.install": "펫 설치…",
+        "menu.remove": "이 펫 삭제…",
+        "menu.update_check": "업데이트 확인…",
+        "menu.update_current": "최신 버전",
+        "menu.update_available": "{version} 로 업데이트",
+        "menu.updating": "업데이트 중…",
         "menu.quit": "종료",
+        "dialog.install": "펫 id 또는 codex-pets.net 링크:",
+        "dialog.remove": "{pet} 을(를) 삭제할까요? 갤러리에서 다시 받을 수 있습니다.",
+        "dialog.ok": "확인",
+        "dialog.cancel": "취소",
+        "toast.installed": "{pet} 설치됨",
+        "toast.removed": "{pet} 삭제됨",
+        "toast.failed": "실패: {reason}",
         "jump.hint": "클릭하면 이동",
     },
 }
@@ -241,7 +268,10 @@ class Overlay(Gtk.Window):
         self.flash_until = 0.0
         self.press_origin: tuple[int, int] | None = None
         self.menu_opened_at = 0.0
-        self.menu: Gtk.Menu | None = None
+        self.menu: Gtk.Window | None = None
+        #: None until a check has run; then {current, latest, available}.
+        self.update_info: dict[str, str | bool] | None = None
+        self.busy = ""  # a one-word note shown in the menu while work is running
 
         self.dragging = False
         # The overlay owns its position. Reading it back from GTK on every walk
@@ -281,6 +311,7 @@ class Overlay(Gtk.Window):
         self._apply_input_shape()
         if poll:
             GLib.timeout_add(POLL_INTERVAL_MS, self._poll_state)
+            self._schedule_update_check()
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -795,6 +826,16 @@ class Overlay(Gtk.Window):
             self._open_gallery()
 
         box.pack_start(self._menu_row(self.labels["menu.browse"], browse), False, False, 0)
+        box.pack_start(
+            self._menu_row(
+                self.labels["menu.install"], lambda _b: (close(), self._install_pack())
+            ),
+            False, False, 0,
+        )
+        box.pack_start(
+            self._menu_row(self.labels["menu.remove"], lambda _b: (close(), self._remove_pack())),
+            False, False, 0,
+        )
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
 
         for key, label, default in (
@@ -814,6 +855,7 @@ class Overlay(Gtk.Window):
             )
 
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+        box.pack_start(self._update_row(close), False, False, 0)
         box.pack_start(
             self._menu_row(self.labels["menu.quit"], lambda *_: (close(), self.quit())),
             False, False, 0,
@@ -837,6 +879,196 @@ class Overlay(Gtk.Window):
         self.menu = popup
         self.menu_opened_at = time.monotonic()
         trace(f"menu popped, xid={_xid(popup)}")
+
+    # ------------------------------------------------------- pack management
+
+    def _in_background(self, work, done) -> None:
+        """Run `work()` off the main loop and hand its result to `done()`.
+
+        Installing and update-checking both hit the network, and a menu that
+        freezes while that happens is worse than no menu.
+        """
+
+        def runner() -> None:
+            try:
+                result, error = work(), None
+            except Exception as exc:  # noqa: BLE001 - reported, never raised at the user
+                result, error = None, exc
+            GLib.idle_add(done, result, error)
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _ask(self, prompt: str, entry: bool) -> str | None:
+        """A small modal. Returns the text, "" for a bare confirm, or None."""
+        dialog = Gtk.Dialog(transient_for=self, modal=True)
+        dialog.set_decorated(False)
+        dialog.set_keep_above(True)
+        dialog.add_button(self.labels["dialog.cancel"], Gtk.ResponseType.CANCEL)
+        dialog.add_button(self.labels["dialog.ok"], Gtk.ResponseType.OK)
+        # Enter confirms only where there is something to type. A stray Return
+        # over a confirmation must not delete a pack -- which is exactly how I
+        # lost one while testing this.
+        dialog.set_default_response(Gtk.ResponseType.OK if entry else Gtk.ResponseType.CANCEL)
+
+        content = dialog.get_content_area()
+        content.set_margin_top(12)
+        content.set_margin_bottom(8)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        content.set_spacing(8)
+        label = Gtk.Label(label=prompt)
+        label.set_line_wrap(True)
+        label.set_max_width_chars(40)
+        content.pack_start(label, False, False, 0)
+
+        field = None
+        if entry:
+            field = Gtk.Entry()
+            field.set_activates_default(True)
+            content.pack_start(field, False, False, 0)
+
+        dialog.show_all()
+        # The pet window refuses focus, and a dialog transient for it inherits
+        # that problem: without presenting it explicitly the keyboard never
+        # reaches the entry, so the dialog returns empty and nothing happens.
+        dialog.set_accept_focus(True)
+        dialog.present()
+        if field is not None:
+            field.grab_focus()
+
+        response = dialog.run()
+        text = field.get_text().strip() if field is not None else ""
+        dialog.destroy()
+        trace(f"dialog response={response} text={text!r} focused={dialog.has_toplevel_focus()}")
+        return text if response == Gtk.ResponseType.OK else None
+
+    def _install_pack(self) -> None:
+        from . import registry
+
+        answer = self._ask(self.labels["dialog.install"], entry=True)
+        if not answer:
+            return
+
+        # Accept a bare id or anything ending in one, so a copied gallery link
+        # works: https://codex-pets.net/#/pets/doro-v2-roshan
+        pet_id = answer.rstrip("/").split("/")[-1].split("?")[0].strip()
+        self.busy = pet_id
+        self._flash(f"{pet_id}…", seconds=120)
+
+        def work():
+            directory = registry.install(pet_id, config.claude_home() / "pets")
+            sprites.load_pet(directory["directory"])
+            return directory["id"]
+
+        def done(installed, error):
+            self.busy = ""
+            if error is not None:
+                self._flash(self.labels["toast.failed"].format(reason=error))
+                return False
+            self.settings["pet"] = installed
+            config.update(pet=installed)
+            self._flash(self.labels["toast.installed"].format(pet=installed))
+            self.quit(restart=True)
+            return False
+
+        self._in_background(work, done)
+
+    def _remove_pack(self) -> None:
+        import shutil
+
+        pet_id = self.view.pet.id
+        directory = self.view.pet.directory
+        if config.bundled_pets() in directory.parents:
+            self._flash(self.labels["toast.failed"].format(reason="bundled pack"))
+            return
+        if self._ask(self.labels["dialog.remove"].format(pet=pet_id), entry=False) is None:
+            return
+
+        for root in config.pet_search_paths():
+            candidate = root / pet_id
+            if root != config.bundled_pets() and (candidate / "pet.json").is_file():
+                try:
+                    shutil.rmtree(candidate)
+                except OSError as exc:
+                    self._flash(self.labels["toast.failed"].format(reason=exc))
+                    return
+        config.update(pet=None)
+        self.settings["pet"] = None
+        self._flash(self.labels["toast.removed"].format(pet=pet_id))
+        self.quit(restart=True)
+
+    # --------------------------------------------------------------- updating
+
+    def _schedule_update_check(self) -> None:
+        if not self.settings.get("update_check", True):
+            return
+        GLib.timeout_add_seconds(20, self._run_update_check)
+        # Returning True keeps this one repeating; the first is a one-shot.
+        GLib.timeout_add_seconds(6 * 3600, lambda: self._run_update_check() or True)
+
+    def _run_update_check(self) -> bool:
+        from . import update
+
+        def done(info, error):
+            if error is None:
+                self.update_info = info
+                trace(f"update check: {info}")
+            else:
+                trace(f"update check failed: {error}")
+            return False
+
+        self._in_background(update.check, done)
+        return False  # one-shot; the 6h timer re-arms itself below
+
+    def _check_updates_now(self) -> None:
+        self._flash(self.labels["menu.update_check"])
+
+        from . import update
+
+        def done(info, error):
+            if error is not None:
+                self._flash(self.labels["toast.failed"].format(reason=error))
+                return False
+            self.update_info = info
+            key = "menu.update_available" if info["available"] else "menu.update_current"
+            self._flash(self.labels[key].format(version=info["latest"]))
+            return False
+
+        self._in_background(update.check, done)
+
+    def _apply_update(self) -> None:
+        """Hand the update to a detached process: it will stop and respawn us."""
+        from . import launch
+
+        self._flash(self.labels["menu.updating"], seconds=60)
+        try:
+            subprocess.Popen(  # noqa: S603 - fixed argv
+                [str(launch.launcher_path()), "update"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=str(launch.project_root()),
+            )
+        except OSError as exc:
+            self._flash(self.labels["toast.failed"].format(reason=exc))
+
+    def _update_row(self, close) -> Gtk.Widget:
+        info = self.update_info
+        if info is None:
+            return self._menu_row(
+                self.labels["menu.update_check"], lambda _b: (close(), self._check_updates_now())
+            )
+        if info["available"]:
+            return self._menu_row(
+                self.labels["menu.update_available"].format(version=info["latest"]),
+                lambda _b: (close(), self._apply_update()),
+            )
+        row = self._menu_row(
+            self.labels["menu.update_current"],
+            lambda _b: (close(), self._check_updates_now()),
+        )
+        return row
 
     def _open_gallery(self) -> None:
         """Open the pack gallery in the user's browser."""
