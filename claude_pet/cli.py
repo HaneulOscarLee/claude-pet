@@ -417,8 +417,14 @@ def cmd_status(_args: argparse.Namespace) -> int:
         detail = session.get("detail") or ""
         if origin == desktop.ORIGIN_DESKTOP and not is_app:
             detail = f"{detail} (in Claude Desktop)".strip()
+
+        # What it reported, and what it still counts for. Printing only the
+        # first makes an expired entry look like it is driving the pet.
+        reported = str(session.get("state"))
+        speaks_for = state.effective_state(session, now)
+        shown = reported if speaks_for == reported else f"{reported}→{speaks_for}"
         print(
-            f"  {label:<14}  {str(session.get('state')):<8} "
+            f"  {label:<14}  {shown:<14} "
             f"{detail:<28} pid={where or '?'}{note}"
         )
     return 0
