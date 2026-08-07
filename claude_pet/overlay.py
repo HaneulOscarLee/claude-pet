@@ -170,6 +170,16 @@ def trace(message: str) -> None:
         print(f"[claude-pet] {message}", flush=True)
 
 
+def _xid(menu) -> str:
+    """X window id of a menu's toplevel, for matching against xwininfo."""
+    toplevel = menu.get_toplevel()
+    surface = toplevel.get_window() if toplevel is not None else None
+    try:
+        return hex(surface.get_xid())
+    except AttributeError:
+        return "?"
+
+
 def _to_pixbuf(image) -> GdkPixbuf.Pixbuf:
     data = GLib.Bytes.new(image.tobytes())
     return GdkPixbuf.Pixbuf.new_from_bytes(
@@ -233,6 +243,7 @@ class Overlay(Gtk.Window):
         self.flash_until = 0.0
         self.press_origin: tuple[int, int] | None = None
         self.menu_opened_at = 0.0
+        self.menu: Gtk.Menu | None = None
 
         self.dragging = False
         # The overlay owns its position. Reading it back from GTK on every walk
@@ -715,7 +726,14 @@ class Overlay(Gtk.Window):
         self.queue_draw()
 
     def _show_menu(self, event) -> None:
+        # Never leave an older menu behind: they are override-redirect windows
+        # that outlive a popdown, and a stale one stays on screen forever.
+        if self.menu is not None:
+            self.menu.destroy()
+            self.menu = None
+
         menu = Gtk.Menu()
+        self.menu = menu
 
         header = Gtk.MenuItem(label=f"{self.view.pet.display_name} · v{self.view.pet.version}")
         header.set_sensitive(False)
@@ -768,7 +786,7 @@ class Overlay(Gtk.Window):
         self.menu_opened_at = time.monotonic()
         menu.connect("grab-broken-event", self._on_menu_grab_broken, menu)
         menu.connect("unmap", lambda *_: trace("menu unmapped"))
-        trace("menu popped")
+        trace(f"menu popped, toplevel xid={_xid(menu)}")
 
     def _on_menu_grab_broken(self, _menu, event, menu) -> bool:
         age = time.monotonic() - self.menu_opened_at
@@ -792,27 +810,33 @@ class Overlay(Gtk.Window):
         return False
 
     def _dismiss(self, menu) -> None:
-        """Take the menu off the screen.
+        """Take the menu's window off the screen, whatever it takes.
 
-        What is actually on screen is the menu's *toplevel*, not the menu
-        widget: `menu.get_mapped()` reads False the whole time the menu is
-        visible, so checking it proved nothing and hid this for a while. The
-        toplevel is what has to go, and it is hidden directly if deactivating
-        and popping down leave it up.
+        When the grab is broken by a Wayland surface the menu is left in a state
+        where GTK's own teardown does not reach the X window: popdown(),
+        deactivate(), hiding the toplevel and even destroy() all reported success
+        while `xwininfo` still showed the window IsViewable. So the underlying
+        GdkWindow is unmapped directly and the display flushed, before the widget
+        is destroyed.
         """
+        trace("  closing the menu")
         toplevel = menu.get_toplevel()
-        before = toplevel.get_mapped() if isinstance(toplevel, Gtk.Window) else None
-        trace(f"  closing the menu (toplevel mapped={before})")
+        surface = toplevel.get_window() if isinstance(toplevel, Gtk.Window) else None
 
-        menu.deactivate()
         menu.popdown()
-
-        if isinstance(toplevel, Gtk.Window) and toplevel.get_mapped():
-            trace("  toplevel still mapped; hiding it directly")
+        if isinstance(toplevel, Gtk.Window):
             toplevel.hide()
+        if surface is not None and surface.is_visible():
+            trace("  X window still up; unmapping it directly")
+            surface.hide()
 
-        after = toplevel.get_mapped() if isinstance(toplevel, Gtk.Window) else None
-        trace(f"  toplevel mapped after close: {after}")
+        menu.destroy()
+        if self.menu is menu:
+            self.menu = None
+
+        Gdk.Display.get_default().flush()
+        still = surface.is_visible() if surface is not None else None
+        trace(f"  menu destroyed (X window visible={still})")
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():
@@ -1006,6 +1030,19 @@ def run(pet_id: str | None = None) -> int:
     )
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal_number, lambda: (overlay.quit(), True)[1])
+
+    if DEBUG:
+        # SIGUSR1 dismisses the menu, so the teardown can be exercised on demand
+        # instead of waiting for a grab to break. Debug builds only.
+        def _dismiss_on_signal() -> bool:
+            if overlay.menu is not None:
+                trace("SIGUSR1: dismissing the menu")
+                overlay._dismiss(overlay.menu)
+            else:
+                trace("SIGUSR1: no menu open")
+            return True
+
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, _dismiss_on_signal)
 
     overlay._adopt(state.aggregate())
     Gtk.main()
