@@ -72,13 +72,8 @@ def installed_version() -> str:
         return "unknown"
 
 
-def latest_release() -> str:
-    """Tag of the newest release, without the leading v.
-
-    What a packaged install should compare against: a new .deb only exists when
-    a release is cut, so comparing with the tip of the branch would report an
-    update every time main moved.
-    """
+def latest_release_info() -> tuple[str, str | None]:
+    """Newest release: its version, and the .deb to install if there is one."""
     url = f"https://api.github.com/repos/{REPO}/releases/latest"
     request = urllib.request.Request(
         url, headers={"User-Agent": "claude-pet", "Accept": "application/vnd.github+json"}
@@ -88,10 +83,28 @@ def latest_release() -> str:
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError) as exc:
         raise UpdateError(f"could not reach GitHub: {exc}") from exc
+
     tag = payload.get("tag_name")
     if not tag:
         raise UpdateError("GitHub returned no release")
-    return tag.lstrip("v")
+
+    package = None
+    for asset in payload.get("assets") or []:
+        name = str(asset.get("name") or "")
+        if name.endswith(".deb") and asset.get("browser_download_url"):
+            package = asset["browser_download_url"]
+            break
+    return tag.lstrip("v"), package
+
+
+def latest_release() -> str:
+    """Tag of the newest release, without the leading v.
+
+    What a packaged install should compare against: a new .deb only exists when
+    a release is cut, so comparing with the tip of the branch would report an
+    update every time main moved.
+    """
+    return latest_release_info()[0]
 
 
 def latest_sha() -> str:
@@ -193,20 +206,11 @@ def update(check_only: bool = False) -> int:
     print(f"version : {current}")
 
     # A package-managed install belongs to the package manager. Rewriting /usr
-    # behind its back would leave dpkg's idea of the files wrong.
+    # behind its back would leave dpkg's idea of the files wrong -- but a
+    # command called `update` that only prints a link has not updated anything,
+    # so it hands the new package to the installer instead.
     if is_system_install(root) and not check_only:
-        try:
-            latest = latest_release()
-        except UpdateError as exc:
-            print(f"claude-pet: {exc}")
-            return 1
-        if latest == current:
-            print("already up to date")
-            return 0
-        print(f"latest  : {latest}")
-        print("this is a system package; install the new .deb from:")
-        print(f"  {releases_url()}")
-        return 0
+        return _update_package(current)
 
     if check_only:
         try:
@@ -293,6 +297,82 @@ def _report_new_requirements() -> None:
             print(f"  {label}: {found[1]} {packages[found[0]]}")
         else:
             print(f"  {label}: install one of {', '.join(sorted(set(packages.values())))}")
+
+
+def _update_package(current: str) -> int:
+    """Install the newest release over a package-managed install.
+
+    dpkg has to do the writing, so this downloads the .deb and asks the system
+    installer to take it, prompting through polkit the way any desktop
+    application updating a system package does. Printing a link and stopping
+    was honest about the constraint and useless about the goal: people ran
+    `update`, watched nothing happen, and reported the update as broken.
+    """
+    try:
+        latest, package_url = latest_release_info()
+    except UpdateError as exc:
+        print(f"claude-pet: {exc}")
+        return 1
+
+    if latest == current:
+        print("already up to date")
+        return 0
+    print(f"latest  : {latest}")
+
+    installer = _graphical_installer()
+    if package_url is None or installer is None:
+        # Nothing to hand over, or nothing to hand it to.
+        print("this is a system package; install the new .deb from:")
+        print(f"  {releases_url()}")
+        return 0
+
+    cache = Path(
+        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    ) / "claude-pet"
+    target = cache / package_url.rsplit("/", 1)[-1]
+    print(f"downloading {target.name}...")
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(package_url, headers={"User-Agent": "claude-pet"})
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            payload = response.read()
+        target.write_bytes(payload)
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"claude-pet: download failed: {exc}")
+        print(f"  get it by hand from {releases_url()}")
+        return 1
+
+    print("installing (you will be asked to authenticate)...")
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            installer + [str(target)], timeout=300, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"claude-pet: could not run the installer: {exc}")
+        print(f"  the package is at {target}")
+        return 1
+
+    if done.returncode != 0:
+        # Cancelled at the password prompt, most likely.
+        print("claude-pet: the install did not complete")
+        print(f"  the package is at {target}, or get it from {releases_url()}")
+        return 1
+
+    print(f"updated : {current} -> {latest}")
+    _report_new_requirements()
+    _restart_overlay()
+    return 0
+
+
+def _graphical_installer() -> list[str] | None:
+    """Argv that installs a local .deb, asking for authority as it goes."""
+    if shutil.which("pkexec") and shutil.which("apt-get"):
+        # polkit puts up the desktop's own password prompt. `env -i` is not
+        # used: apt needs a sane environment, and pkexec already scrubs it.
+        return ["pkexec", "apt-get", "install", "-y", "--allow-downgrades"]
+    if shutil.which("gdebi-gtk"):
+        return ["gdebi-gtk"]
+    return None
 
 
 def _restart_overlay() -> None:

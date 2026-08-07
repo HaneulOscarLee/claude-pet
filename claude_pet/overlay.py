@@ -312,6 +312,8 @@ class Overlay(Gtk.Window):
         self.desktop_written_at = 0.0
         self.cpu_sampled_at = 0.0
         self.tray: tray.Tray | None = None
+        #: What the code on disk looked like when it was imported.
+        self.code_stamp: tuple[float, int] | None = None
         # A short-lived bubble override, for telling the user how a click went.
         self.flash_text = ""
         self.flash_until = 0.0
@@ -368,6 +370,8 @@ class Overlay(Gtk.Window):
             self._schedule_update_check()
             self._start_desktop_watch()
             self._start_tray()
+            self.code_stamp = self._code_stamp()
+            GLib.timeout_add_seconds(60, self._check_for_new_code)
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -713,6 +717,38 @@ class Overlay(Gtk.Window):
 
         menu.show_all()
         return menu
+
+    # ---------------------------------------------------------- code changes
+
+    def _code_stamp(self) -> tuple[float, int] | None:
+        """Fingerprint of the code on disk, for noticing it has been replaced."""
+        try:
+            info = os.stat(Path(__file__).resolve().parent / "__init__.py")
+        except OSError:
+            return None
+        return (info.st_mtime, info.st_size)
+
+    def _check_for_new_code(self) -> bool:
+        """Restart if the installed code is no longer the code we are running.
+
+        An upgrade replaces files under a process that has already imported
+        them, so the pet carries on with the old behaviour and the update looks
+        like it did nothing. That is easy to hit without going near
+        `claude-pet update` at all -- apt, or the desktop's software centre,
+        upgrading the package in the background.
+
+        Deferred while the pet is busy being used: restarting out from under a
+        drag or an open menu would be its own kind of broken.
+        """
+        stamp = self._code_stamp()
+        if stamp is None or self.code_stamp is None or stamp == self.code_stamp:
+            return True
+        if self.dragging or self.menu is not None or self.busy:
+            return True
+
+        print("claude-pet: the installed version changed, restarting", flush=True)
+        self.quit(restart=True)
+        return False
 
     def _sample_cpu(self) -> None:
         """Watch what the session processes are actually doing.
@@ -1570,14 +1606,14 @@ class Overlay(Gtk.Window):
         self._in_background(update.check, done)
 
     def _apply_update(self) -> None:
-        """Hand the update to a detached process: it will stop and respawn us."""
-        from . import launch, update
+        """Hand the update to a detached process: it will stop and respawn us.
 
-        # A packaged install belongs to the package manager, so the most useful
-        # thing the button can do is open the page with the new .deb on it.
-        if update.is_system_install():
-            self._open_url(update.releases_url())
-            return
+        Packaged installs included. They cannot rewrite /usr themselves, but
+        `update` hands the new .deb to the system installer and polkit asks for
+        authority -- which is a good deal more use than the link this used to
+        open and leave the reader to act on.
+        """
+        from . import launch
 
         self._flash(self.labels["menu.updating"], seconds=60)
         try:

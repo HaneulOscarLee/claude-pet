@@ -404,7 +404,7 @@ sessions  :
 
 ```bash
 claude-pet setup                      # pack + hooks + PATH link + start
-claude-pet update                     # pull or re-download, then restart the pet
+claude-pet update                     # fetch the new version, then restart the pet
 claude-pet update --check             # is there a newer version?
 claude-pet doctor                     # environment + integration check
 claude-pet doctor --fix               # same as setup
@@ -420,6 +420,33 @@ claude-pet fix-terminal --undo        # put it back
 `install-hooks` **merges** into your existing settings: it never touches hooks
 it did not write, and re-running it adds nothing. `uninstall-hooks` removes
 only its own entries.
+
+`update` works out which kind of install it is looking at and does the right
+thing for it:
+
+| Install | What `update` does |
+|---|---|
+| git clone | fast-forwards `main` (refuses if you have uncommitted changes) |
+| `install.sh` tarball | re-downloads and replaces the tracked files |
+| `.deb` | downloads the new package and hands it to the system installer, which asks for authority through the desktop's usual prompt |
+
+The last one cannot rewrite `/usr` itself — dpkg has to do that — but a command
+called `update` that only prints a link has not updated anything, which is
+exactly how it was reported.
+
+Whichever route, the running pet restarts onto the new code. It also notices
+when its files are replaced underneath it and restarts by itself, so upgrading
+the package through apt or a software centre applies without the pet carrying
+on with the old behaviour. And since an update replaces code and not packages,
+it names anything the new version could use and cannot find:
+
+```console
+$ claude-pet update
+updated : 0.1.0 -> 0.2.0
+
+this version can do more with a package you do not have:
+  status-bar menu: sudo apt install gir1.2-ayatanaappindicator3-0.1
+```
 
 ### Settings
 
