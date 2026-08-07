@@ -61,6 +61,10 @@ icon.resize((128, 128), Image.NEAREST).save(target)
 PY
 fi
 
+# Stamp the version so an installed package can say what it is. Without this
+# `update --check` has nothing to compare and reports an update every time.
+printf '%s\n' "$VERSION" > "$INSTALL_DIR/.claude-pet-version"
+
 INSTALLED_SIZE="$(du -sk "$STAGE" | cut -f1)"
 
 cat > "$STAGE/DEBIAN/control" <<EOF

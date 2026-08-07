@@ -67,9 +67,31 @@ def installed_version() -> str:
         return result.stdout.strip() or "unknown"
     marker = root / VERSION_FILE
     try:
-        return marker.read_text(encoding="utf-8").strip()[:7] or "unknown"
+        return marker.read_text(encoding="utf-8").strip() or "unknown"
     except OSError:
         return "unknown"
+
+
+def latest_release() -> str:
+    """Tag of the newest release, without the leading v.
+
+    What a packaged install should compare against: a new .deb only exists when
+    a release is cut, so comparing with the tip of the branch would report an
+    update every time main moved.
+    """
+    url = f"https://api.github.com/repos/{REPO}/releases/latest"
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "claude-pet", "Accept": "application/vnd.github+json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError, OSError) as exc:
+        raise UpdateError(f"could not reach GitHub: {exc}") from exc
+    tag = payload.get("tag_name")
+    if not tag:
+        raise UpdateError("GitHub returned no release")
+    return tag.lstrip("v")
 
 
 def latest_sha() -> str:
@@ -154,7 +176,7 @@ def check() -> dict[str, str | bool]:
     update" apart from "could not look".
     """
     current = installed_version()
-    latest = latest_sha()[:7]
+    latest = latest_release() if is_system_install() else latest_sha()[:7]
     return {"current": current, "latest": latest, "available": current != latest}
 
 
@@ -174,7 +196,7 @@ def update(check_only: bool = False) -> int:
     # behind its back would leave dpkg's idea of the files wrong.
     if is_system_install(root) and not check_only:
         try:
-            latest = latest_sha()[:7]
+            latest = latest_release()
         except UpdateError as exc:
             print(f"claude-pet: {exc}")
             return 1
@@ -188,7 +210,7 @@ def update(check_only: bool = False) -> int:
 
     if check_only:
         try:
-            latest = latest_sha()[:7]
+            latest = latest_release() if is_system_install(root) else latest_sha()[:7]
         except UpdateError as exc:
             print(f"claude-pet: {exc}")
             return 1
