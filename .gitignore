@@ -4,6 +4,9 @@ __pycache__/
 # oh-my-claudecode session state (session ids, local transcript paths)
 .omc/
 
+# written by `claude-pet update` on installs that have no git history
+.claude-pet-version
+
 # `preview` / `snapshot` output
 *-preview.png
 *.snapshot.png

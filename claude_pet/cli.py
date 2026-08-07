@@ -427,6 +427,12 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
 # ------------------------------------------------------------------- doctor
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    from . import update
+
+    return update.update(check_only=args.check)
+
+
 def cmd_fix_terminal(args: argparse.Namespace) -> int:
     from . import terminal
 
@@ -978,6 +984,12 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = subparsers.add_parser("uninstall-hooks", help="remove the hooks again")
     uninstall.add_argument("--project", action="store_true")
     uninstall.set_defaults(func=cmd_uninstall_hooks)
+
+    update_parser = subparsers.add_parser("update", help="update to the latest version")
+    update_parser.add_argument(
+        "--check", action="store_true", help="only report whether an update is available"
+    )
+    update_parser.set_defaults(func=cmd_update)
 
     fix_terminal = subparsers.add_parser(
         "fix-terminal", help="run your terminal under XWayland so clicks can raise it"

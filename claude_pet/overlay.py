@@ -753,6 +753,10 @@ class Overlay(Gtk.Window):
         popup.set_skip_pager_hint(True)
         popup.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
         popup.set_resizable(False)
+        # The pet is keep-above too, so without a parent relationship the window
+        # manager is free to leave the menu underneath it. Transient windows
+        # stack above the window they belong to.
+        popup.set_transient_for(self)
 
         frame = Gtk.Frame()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -819,6 +823,9 @@ class Overlay(Gtk.Window):
         popup.show_all()
         self._place_menu(popup, event)
         popup.present()
+        surface = popup.get_window()
+        if surface is not None:
+            surface.raise_()
 
         self.menu = popup
         self.menu_opened_at = time.monotonic()

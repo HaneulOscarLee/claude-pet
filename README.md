@@ -60,7 +60,17 @@ curl -fsSL https://raw.githubusercontent.com/HaneulOscarLee/claude-pet/main/inst
 
 No git needed — it downloads the source tarball from GitHub into
 `~/.local/share/claude-pet`, installs everything it needs through your package
-manager (GTK, Pillow, `wmctrl`, `libnotify`), and runs `setup`. Re-run it any time to upgrade. It refuses to overwrite a target
+manager (GTK, Pillow, `wmctrl`, `libnotify`), and runs `setup`.
+
+To update later:
+
+```bash
+claude-pet update           # or --check to just see if there is one
+```
+
+It works out which kind of install it is on: a git clone is fast-forwarded, a
+tarball install is re-downloaded. Either way the pet is restarted onto the new
+code. A clone with uncommitted changes is left alone rather than clobbered. Re-run it any time to upgrade. It refuses to overwrite a target
 directory that is not a previous install of its own.
 
 If piping a script into a shell is not your thing — reasonable — read it first
@@ -276,6 +286,8 @@ state file: /home/you/.local/state/claude-pet/state.json
 
 ```bash
 claude-pet setup                      # pack + hooks + PATH link + start
+claude-pet update                     # pull or re-download, then restart the pet
+claude-pet update --check             # is there a newer version?
 claude-pet doctor                     # environment + integration check
 claude-pet doctor --fix               # same as setup
 
@@ -529,6 +541,7 @@ about **33 ms** per tool call.
 | `claude_pet/hook.py` | hook event → pet state, overlay autostart |
 | `claude_pet/overlay.py` | GTK3 window, animation, bubble, walking, mouse-look |
 | `claude_pet/launch.py` | starting the overlay detached, shared by hook and CLI |
+| `claude_pet/update.py` | updating a git clone or a tarball install in place |
 | `claude_pet/locate.py` | recording where a session runs (hook side) |
 | `claude_pet/jump.py` | jumping back to it (overlay side) |
 | `claude_pet/terminal.py` | making a Wayland terminal reachable for that jump |
