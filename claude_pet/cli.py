@@ -372,6 +372,25 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return cmd_run(args)
 
 
+def cmd_log(args: argparse.Namespace) -> int:
+    """Every change in what the pet showed, and what caused it.
+
+    `status` only ever describes now, and a state you did not expect is
+    usually over by the time you go looking.
+    """
+    path = state.log_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        print(f"no transitions recorded yet ({path})")
+        print("the pet writes this while it runs; start it with `claude-pet run --detach`")
+        return 0
+
+    for line in lines[-int(args.lines):]:
+        print(line)
+    return 0
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     snapshot = state.aggregate()
     pid = _overlay_pid()
@@ -1114,6 +1133,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("stop", help="stop the overlay").set_defaults(func=cmd_stop)
     subparsers.add_parser("status", help="show the current state and live sessions").set_defaults(func=cmd_status)
+    log_parser = subparsers.add_parser(
+        "log", help="what the pet showed over time, and why"
+    )
+    log_parser.add_argument("-n", "--lines", default=40, help="how many entries to show")
+    log_parser.set_defaults(func=cmd_log)
     doctor = subparsers.add_parser("doctor", help="check the environment and integration")
     doctor.add_argument(
         "--fix",

@@ -104,12 +104,15 @@ def dwell_checks() -> list[tuple[str, bool]]:
             session["dwell"] = dwell
         return session
 
+    # Nothing derived from a notification is `waiting` any more, but the
+    # override that makes one expire is still what protects the pet if that
+    # ever changes.
     results.append(
-        ("notification waiting expires",
+        ("a session-carried dwell expires waiting",
          state.effective_state(entry("waiting", 90, 60.0), NOW) == "idle")
     )
     results.append(
-        ("notification waiting holds until then",
+        ("...and holds until then",
          state.effective_state(entry("waiting", 30, 60.0), NOW) == "waiting")
     )
     # The rule it overrides, unchanged for real sessions.
@@ -149,10 +152,18 @@ def dwell_checks() -> list[tuple[str, bool]]:
 def notification_checks() -> list[tuple[str, bool]]:
     results = [
         ("reply -> done", desktop.classify("Claude", "Your response is ready") == "review"),
-        ("permission ask -> needs you",
-         desktop.classify("Claude", "Claude needs your permission to run Bash") == "waiting"),
-        ("korean permission ask -> needs you", desktop.classify("승인 필요", "") == "waiting"),
-        ("unknown text falls back to done", desktop.classify("Claude", "hello") == "review"),
+        # Reading the prose for "permission"-ish words promoted ordinary
+        # notices to the highest-priority state there is. `확인` is the label
+        # on half the OK buttons in Korean, so a plain "your reply is ready"
+        # became a pet demanding attention nobody had asked for.
+        ("korean 확인 is not a permission ask",
+         desktop.classify("응답을 확인하세요", "") == "review"),
+        ("english permission wording is not either",
+         desktop.classify("Claude", "Claude needs your permission") == "review"),
+        ("nothing a notification says produces needs-you",
+         all(desktop.classify(text, other) == "review"
+             for text in ("승인", "권한", "대기 중", "approve", "confirm", "allow", "")
+             for other in ("", "anything at all"))),
         ("app name matches",
          desktop.is_claude_notification("Claude", None)),
         ("desktop-entry hint matches",

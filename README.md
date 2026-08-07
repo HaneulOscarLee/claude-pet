@@ -230,6 +230,15 @@ sessions  :
   40660d1a        waving→idle                pid=3072258  SessionStart 11816s ago
 ```
 
+A state you did not expect is usually over by the time you go looking, so the
+pet also keeps a short log of every change and what caused it:
+
+```console
+$ claude-pet log
+12:18:04  idle -> running  via=PreToolUse         session=ed0f2f9c  sessions=4  detail='Bash'
+12:18:07  running -> review  via=DesktopNotification  session=claude-desktop  sessions=4
+```
+
 Several Claude sessions at once collapse into the most urgent state:
 
 ```
@@ -280,9 +289,13 @@ rather than hunting for a terminal that does not exist.
 side. The one signal the app emits is the desktop notification it posts when a
 reply arrives, so that is what the pet watches — which means:
 
-- you get **done** (20s) or **needs you** (60s, since it is the more urgent of
-  the two); you do **not** get **working**, because nothing announces the start
-  of a turn
+- you get **done**, held 20 seconds. Never **needs you**: the text of a
+  notification is not evidence of what it wants, and reading it for words like
+  "permission" turned ordinary Korean notices — `확인`, the label on half the
+  OK buttons — into a pet demanding attention nobody had asked for. Where
+  **needs you** genuinely applies, that work runs through Claude Code and says
+  so through the hooks
+- you do **not** get **working**, because nothing announces the start of a turn
 - both time out on their own, unlike the same states from a terminal session.
   A session *reports* a state and keeps reporting it, so its **needs you** is
   allowed to hold until Claude moves on. A notification is a one-off: nothing
@@ -360,6 +373,7 @@ claude-pet run --pet dario      # start with a specific pack, just this once
 claude-pet restart              # after changing the pack or settings
 claude-pet stop
 claude-pet status               # current state and every live session
+claude-pet log                  # what it showed over time, and why
 ```
 
 ```console

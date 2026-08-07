@@ -206,21 +206,24 @@ NOTIFY_DWELL_SECONDS: dict[str, float] = {
     "waiting": 60.0,  # longer, because it is the more urgent of the two
 }
 
-#: Summary/body words that mean the app wants a decision rather than merely
-#: reporting that a reply arrived. A heuristic, and treated as one: anything
-#: unrecognised falls through to "done", which is the common case and the
-#: harmless guess.
-_NEEDS_YOU = (
-    "permission", "approve", "approval", "allow", "confirm", "waiting for",
-    "권한", "승인", "확인", "대기",
-)
-
-
 def classify(summary: str, body: str) -> str:
-    """Pet state for a notification the app just posted."""
-    text = f"{summary} {body}".lower()
-    if any(word in text for word in _NEEDS_YOU):
-        return "waiting"
+    """Pet state for a notification the app just posted: always `done`.
+
+    This used to read the text for words like "permission" or "승인" and
+    promote those to `needs you`. It was wrong in both directions and wrong in
+    the worse one more often: `확인` -- "check", "confirm", the label on half
+    the OK buttons in Korean -- turned ordinary "your reply is ready" notices
+    into a pet demanding attention nobody had asked for, for a full minute at a
+    time, on the highest-priority state there is.
+
+    Guessing was also unnecessary. Where `needs you` genuinely applies -- the
+    app asking to run something -- that work goes through Claude Code, which
+    reports `Notification` through the hooks and states it outright. Guessing
+    from notification prose only ever added noise on top of a signal that was
+    already accurate.
+
+    So a notification means what it reliably means: something finished.
+    """
     return "review"
 
 

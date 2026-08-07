@@ -342,6 +342,42 @@ def touch(session_id: str) -> None:
         _write(data)
 
 
+def log_path() -> Path:
+    return state_dir() / "transitions.log"
+
+
+#: Kept small on purpose: this is for answering "why did it just say that",
+#: not for keeping history.
+LOG_LINES = 200
+
+
+def log_transition(previous: str, current: str, snapshot: dict[str, Any]) -> None:
+    """Record a change in what the pet is showing, and what caused it.
+
+    A wrong state is almost always gone by the time anyone thinks to look, so
+    asking the live state file is asking too late. This is the difference
+    between diagnosing the next surprise and trying to reproduce it.
+    """
+    winner = snapshot.get("winner") or {}
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    detail = str(snapshot.get("detail") or "")
+    line = (
+        f"{stamp}  {previous} -> {current}"
+        f"  via={winner.get('event') or '?'}"
+        f"  session={str(winner.get('id') or '?')[:14]}"
+        f"  sessions={snapshot.get('sessions', 0)}"
+        + (f"  detail={detail!r}" if detail else "")
+    )
+    try:
+        path = log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        existing.append(line)
+        path.write_text("\n".join(existing[-LOG_LINES:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # a diagnostic must never be the thing that breaks
+
+
 def effective_state(session: dict[str, Any], now: float) -> str:
     """The state this session still deserves to speak for, given its dwell."""
     reported = session.get("state")
@@ -397,6 +433,7 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
     state_name, winner = min(
         ranked, key=lambda pair: (order.get(pair[0], len(PRIORITY)), -pair[1]["ts"])
     )
+    identifiers = {id(session): key for key, session in data.get("sessions", {}).items()}
     return {
         "state": state_name,
         "sessions": len(live),
@@ -406,4 +443,7 @@ def aggregate(data: dict[str, Any] | None = None) -> dict[str, Any]:
         # Where to jump when the pet is clicked.
         "locator": winner.get("locator") if isinstance(winner.get("locator"), dict) else None,
         "since": winner.get("ts", now),
+        # Which session is speaking, and what put it there. Only used for the
+        # transition log, where "the pet says X" is useless without "because".
+        "winner": {"id": identifiers.get(id(winner)), "event": winner.get("event")},
     }

@@ -464,6 +464,8 @@ class Overlay(Gtk.Window):
                 detail=detail,
                 cwd=DESKTOP_LABEL,
                 locator=desktop.locator(),
+                # Named like a hook event so the log reads the same either way.
+                event="DesktopNotification",
                 # Carried on the entry, because nothing will ever arrive to
                 # clear a state the app only announced once.
                 dwell=desktop.NOTIFY_DWELL_SECONDS.get(state_name),
@@ -565,6 +567,7 @@ class Overlay(Gtk.Window):
         if new_state == self.state:
             return
         previous = self.state
+        state.log_transition(previous, new_state, snapshot)
         self.state = new_state
         self.frame_index = 0
         self.walking = 0
