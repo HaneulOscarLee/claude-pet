@@ -117,7 +117,6 @@ LABELS: dict[str, dict[str, str]] = {
         "lang.auto": "Automatic",
         "lang.en": "English",
         "lang.ko": "한국어",
-        "tray.show": "Where is it? (reset position)",
         "toast.failed": "failed: {reason}",
         "jump.hint": "click to jump",
     },
@@ -156,7 +155,6 @@ LABELS: dict[str, dict[str, str]] = {
         "lang.auto": "자동",
         "lang.en": "English",
         "lang.ko": "한국어",
-        "tray.show": "펫 어디감? (위치 초기화)",
         "toast.failed": "실패: {reason}",
         "jump.hint": "클릭하면 이동",
     },
@@ -634,87 +632,60 @@ class Overlay(Gtk.Window):
             self.tray.set_menu(self._build_tray_menu())
 
     def _build_tray_menu(self):
-        """The same controls as the right-click menu, in a real Gtk.Menu.
+        """The right-click menu again, in a real Gtk.Menu.
 
-        A GtkMenu is right here and wrong on the pet: the shell owns this one
-        and dismisses it, whereas the pet's own popup had to be an ordinary
-        window to ever close on an outside click.
+        Same model, same order, same words -- the two used to be built by hand
+        separately and had drifted apart. A GtkMenu is right here and wrong on
+        the pet: the shell owns and dismisses this one, whereas the pet's own
+        popup had to be an ordinary window to close on an outside click at all.
+        Pages become real submenus, which is what a tray menu can do.
         """
         menu = Gtk.Menu()
 
-        def add(label: str, callback, *, parent=None, checked: bool | None = None):
-            if checked is None:
-                item = Gtk.MenuItem(label=label)
-            else:
-                item = Gtk.CheckMenuItem(label=label)
-                item.set_active(checked)
-            item.connect("activate", callback)
-            (parent or menu).append(item)
-            return item
+        def fill(target, entries) -> None:
+            for entry in entries:
+                kind = entry[0]
+                if kind == "separator":
+                    target.append(Gtk.SeparatorMenuItem())
+                elif kind == "caption":
+                    item = Gtk.MenuItem(label=entry[1])
+                    item.set_sensitive(False)
+                    target.append(item)
+                elif kind == "submenu":
+                    item = Gtk.MenuItem(label=entry[1].rstrip("… "))
+                    child = Gtk.Menu()
+                    fill(child, self._menu_model(entry[2]))
+                    item.set_submenu(child)
+                    target.append(item)
+                elif kind == "action":
+                    item = Gtk.MenuItem(label=entry[1])
+                    item.connect("activate", lambda _i, run=entry[2]: run())
+                    target.append(item)
+                elif kind == "update":
+                    item = Gtk.MenuItem(label=self._update_label())
+                    item.connect("activate", lambda _i: self._update_activate())
+                    target.append(item)
+                elif kind in {"toggle", "choice"}:
+                    if kind == "toggle":
+                        key, label, default = entry[1], entry[2], entry[3]
+                        checked = bool(self.settings.get(key, default))
+                        handler = lambda item, name=key: (  # noqa: E731
+                            None
+                            if bool(item.get_active()) == bool(self.settings.get(name))
+                            else self._toggle_setting(name)
+                        )
+                    else:
+                        label, group, value = entry[1], entry[2], entry[3]
+                        checked = self._is_chosen(group, value)
+                        handler = lambda item, g=group, v=value: (  # noqa: E731
+                            None if item.get_active() is False else self._choose(g, v)
+                        )
+                    item = Gtk.CheckMenuItem(label=label)
+                    item.set_active(checked)
+                    item.connect("activate", handler)
+                    target.append(item)
 
-        def separator(parent=None) -> None:
-            (parent or menu).append(Gtk.SeparatorMenuItem())
-
-        # First, and deliberately: this is the reason the tray exists.
-        add(self.labels["tray.show"], lambda *_: self.reset_position())
-        separator()
-
-        pets = Gtk.Menu()
-        pets_item = Gtk.MenuItem(label=self.labels["menu.pets"].rstrip("…"))
-        pets_item.set_submenu(pets)
-        menu.append(pets_item)
-        for pet_id in config.discover():
-            def pick(_item, chosen=pet_id) -> None:
-                if chosen == self.view.pet.id:
-                    return
-                self.settings["pet"] = chosen
-                config.update(pet=chosen)
-                self.quit(restart=True)
-
-            add(pet_id, pick, parent=pets, checked=pet_id == self.view.pet.id)
-        separator(pets)
-        add(self.labels["menu.browse"], lambda *_: self._open_gallery(), parent=pets)
-        add(self.labels["menu.install"], lambda *_: self._install_pack(), parent=pets)
-        add(self.labels["menu.remove"], lambda *_: self._remove_pack(), parent=pets)
-
-        languages = Gtk.Menu()
-        language_item = Gtk.MenuItem(label=self.labels["menu.language"].rstrip("…"))
-        language_item.set_submenu(languages)
-        menu.append(language_item)
-        current = str(self.settings.get("language") or "auto")
-        for code in ("auto", "en", "ko"):
-            def choose(_item, chosen=code) -> None:
-                if chosen == str(self.settings.get("language") or "auto"):
-                    return
-                self._apply_language(chosen)
-                self._refresh_tray()
-
-            add(self.labels[f"lang.{code}"], choose, parent=languages, checked=code == current)
-
-        separator()
-        toggles = [
-            ("walk", self.labels["menu.walk"], True),
-            ("notifications", self.labels["menu.notify"], False),
-            ("autostart", self.labels["menu.autostart"], True),
-            ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
-        ]
-        if desktop.installed():
-            toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
-        for key, label, default in toggles:
-            def toggle(item, name=key) -> None:
-                wanted = bool(item.get_active())
-                if wanted == bool(self.settings.get(name)):
-                    return  # set_active during a rebuild, not a click
-                self.settings[name] = wanted
-                config.update(**{name: wanted})
-                if name == "desktop":
-                    self._apply_desktop_setting()
-
-            add(label, toggle, checked=bool(self.settings.get(key, default)))
-
-        separator()
-        add(self.labels["menu.quit"], lambda *_: self.quit())
-
+        fill(menu, self._menu_model())
         menu.show_all()
         return menu
 
@@ -1335,6 +1306,88 @@ class Overlay(Gtk.Window):
     # would each need their own dismissal handling, which took long enough to
     # get right once, so a page swaps the contents of the window already open.
 
+    def _menu_model(self, page: str = "main") -> list[tuple]:
+        """The menu, written down once for both places it gets drawn.
+
+        The pet's popup and the status-bar menu are the same menu in two widget
+        sets. Building each by hand let them drift: different order, a
+        different word for the same command, and the tray quietly missing the
+        update entry altogether.
+
+        Entries are ("separator",) | ("caption", text) | ("submenu", label,
+        page) | ("action", label, callback) | ("toggle", key, label, default) |
+        ("update",).
+        """
+        if page == "pets":
+            entries: list[tuple] = []
+            for pet_id in config.discover():
+                entries.append(("choice", pet_id, "pet", pet_id))
+            entries.append(("separator",))
+            entries.append(("action", self.labels["menu.browse"], self._open_gallery))
+            entries.append(("action", self.labels["menu.install"], self._install_pack))
+            entries.append(("action", self.labels["menu.remove"], self._remove_pack))
+            return entries
+
+        if page == "language":
+            return [
+                ("choice", self.labels[f"lang.{code}"], "language", code)
+                for code in ("auto", "en", "ko")
+            ]
+
+        toggles = [
+            ("walk", self.labels["menu.walk"], True),
+            ("notifications", self.labels["menu.notify"], False),
+            ("autostart", self.labels["menu.autostart"], True),
+            ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
+        ]
+        # Only offered where it means something. On a machine without the app
+        # the row would be a switch wired to nothing.
+        if desktop.installed():
+            toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
+
+        return [
+            ("caption", f"{self.view.pet.display_name} · v{self.view.pet.version}"),
+            ("separator",),
+            ("submenu", self.labels["menu.pets"], "pets"),
+            ("submenu", self.labels["menu.language"], "language"),
+            ("separator",),
+            # High up in both, because it is what you reach for when the pet is
+            # somewhere you cannot get at it.
+            ("action", self.labels["menu.reset"], self.reset_position),
+            ("separator",),
+            *[("toggle", key, label, default) for key, label, default in toggles],
+            ("separator",),
+            ("update",),
+            ("action", self.labels["menu.quit"], lambda: self.quit()),
+        ]
+
+    def _choose(self, kind: str, value: str) -> None:
+        """Apply a pick from the pets or language list."""
+        if kind == "pet":
+            if value == self.view.pet.id:
+                return
+            self.settings["pet"] = value
+            config.update(pet=value)
+            self.quit(restart=True)
+        elif kind == "language":
+            if value == str(self.settings.get("language") or "auto"):
+                return
+            self._apply_language(value)
+            self._refresh_tray()
+
+    def _is_chosen(self, kind: str, value: str) -> bool:
+        if kind == "pet":
+            return value == self.view.pet.id
+        return value == str(self.settings.get("language") or "auto")
+
+    def _toggle_setting(self, key: str) -> None:
+        self.settings[key] = not self.settings.get(key)
+        config.update(**{key: self.settings[key]})
+        if key == "desktop":
+            self._apply_desktop_setting()
+        else:
+            self._refresh_tray()
+
     def _render_page(self, popup, page: str, event=None) -> None:
         box = popup.menu_box
         for child in box.get_children():
@@ -1363,44 +1416,36 @@ class Overlay(Gtk.Window):
         def row(label: str, callback, *, active: bool | None = None) -> None:
             box.pack_start(self._menu_row(label, callback, active=active), False, False, 0)
 
-        if page == "main":
-            caption(f"{self.view.pet.display_name} · v{self.view.pet.version}")
-            separator()
-            row(self.labels["menu.pets"], go("pets"))
-            row(self.labels["menu.language"], go("language"))
-            separator()
-            self._pack_toggles(row, close)
-            separator()
-            row(self.labels["menu.reset"], lambda *_: (close(), self.reset_position()))
-            box.pack_start(self._update_row(close), False, False, 0)
-            row(self.labels["menu.quit"], lambda *_: (close(), self.quit()))
-
-        elif page == "pets":
+        if page != "main":
             row(self.labels["menu.back"], go("main"))
             separator()
-            for pet_id in config.discover():
-                def pick(_button, chosen=pet_id) -> None:
-                    close()
-                    self.settings["pet"] = chosen
-                    config.update(pet=chosen)
-                    self.quit(restart=True)
 
-                row(pet_id, pick, active=pet_id == self.view.pet.id)
-            separator()
-            row(self.labels["menu.browse"], lambda *_: (close(), self._open_gallery()))
-            row(self.labels["menu.install"], lambda *_: (close(), self._install_pack()))
-            row(self.labels["menu.remove"], lambda *_: (close(), self._remove_pack()))
-
-        elif page == "language":
-            row(self.labels["menu.back"], go("main"))
-            separator()
-            current = str(self.settings.get("language") or "auto")
-            for code in ("auto", "en", "ko"):
-                def choose(_button, chosen=code) -> None:
-                    close()
-                    self._apply_language(chosen)
-
-                row(self.labels[f"lang.{code}"], choose, active=code == current)
+        for entry in self._menu_model(page):
+            kind = entry[0]
+            if kind == "separator":
+                separator()
+            elif kind == "caption":
+                caption(entry[1])
+            elif kind == "submenu":
+                row(entry[1], go(entry[2]))
+            elif kind == "action":
+                row(entry[1], lambda _b, run=entry[2]: (close(), run()))
+            elif kind == "toggle":
+                key, label, default = entry[1], entry[2], entry[3]
+                row(
+                    label,
+                    lambda _b, name=key: (self._toggle_setting(name), close()),
+                    active=bool(self.settings.get(key, default)),
+                )
+            elif kind == "choice":
+                label, group, value = entry[1], entry[2], entry[3]
+                row(
+                    label,
+                    lambda _b, g=group, v=value: (close(), self._choose(g, v)),
+                    active=self._is_chosen(group, value),
+                )
+            elif kind == "update":
+                box.pack_start(self._update_row(close), False, False, 0)
 
         popup.show_all()
         # The page just changed shape; let the window shrink to fit it again
@@ -1411,28 +1456,6 @@ class Overlay(Gtk.Window):
         surface = popup.get_window()
         if surface is not None:
             surface.raise_()
-
-    def _pack_toggles(self, row, close) -> None:
-        toggles = [
-            ("walk", self.labels["menu.walk"], True),
-            ("notifications", self.labels["menu.notify"], False),
-            ("autostart", self.labels["menu.autostart"], True),
-            ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
-        ]
-        # Only offered where it means something. On a machine without the app
-        # the row would be a switch wired to nothing.
-        if desktop.installed():
-            toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
-
-        for key, label, default in toggles:
-            def toggle(_button, name=key) -> None:
-                self.settings[name] = not self.settings.get(name)
-                config.update(**{name: self.settings[name]})
-                if name == "desktop":
-                    self._apply_desktop_setting()
-                close()
-
-            row(label, toggle, active=bool(self.settings.get(key, default)))
 
     def _apply_language(self, choice: str) -> None:
         """Switch the bubble's language without a restart.
@@ -1628,22 +1651,26 @@ class Overlay(Gtk.Window):
         except OSError as exc:
             self._flash(self.labels["toast.failed"].format(reason=exc))
 
-    def _update_row(self, close) -> Gtk.Widget:
+    def _update_label(self) -> str:
+        """What the update entry says, given what the last check found."""
         info = self.update_info
         if info is None:
-            return self._menu_row(
-                self.labels["menu.update_check"], lambda _b: (close(), self._check_updates_now())
-            )
+            return self.labels["menu.update_check"]
         if info["available"]:
-            return self._menu_row(
-                self.labels["menu.update_available"].format(version=info["latest"]),
-                lambda _b: (close(), self._apply_update()),
-            )
-        row = self._menu_row(
-            self.labels["menu.update_current"],
-            lambda _b: (close(), self._check_updates_now()),
+            return self.labels["menu.update_available"].format(version=info["latest"])
+        return self.labels["menu.update_current"]
+
+    def _update_activate(self) -> None:
+        info = self.update_info
+        if info is not None and info["available"]:
+            self._apply_update()
+        else:
+            self._check_updates_now()
+
+    def _update_row(self, close) -> Gtk.Widget:
+        return self._menu_row(
+            self._update_label(), lambda _b: (close(), self._update_activate())
         )
-        return row
 
     def _open_gallery(self) -> None:
         """Open the pack gallery in the user's browser."""
