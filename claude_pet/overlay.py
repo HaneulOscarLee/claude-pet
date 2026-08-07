@@ -792,20 +792,27 @@ class Overlay(Gtk.Window):
         return False
 
     def _dismiss(self, menu) -> None:
-        """Close the menu, belt and braces.
+        """Take the menu off the screen.
 
-        `popdown()` alone was observed to leave the menu on screen when the grab
-        was taken by a Wayland surface -- the handler ran and nothing unmapped.
-        `deactivate()` is the documented way to unwind a menu shell, and hide()
-        is the blunt instrument if both are somehow ignored.
+        What is actually on screen is the menu's *toplevel*, not the menu
+        widget: `menu.get_mapped()` reads False the whole time the menu is
+        visible, so checking it proved nothing and hid this for a while. The
+        toplevel is what has to go, and it is hidden directly if deactivating
+        and popping down leave it up.
         """
-        trace("  closing the menu")
+        toplevel = menu.get_toplevel()
+        before = toplevel.get_mapped() if isinstance(toplevel, Gtk.Window) else None
+        trace(f"  closing the menu (toplevel mapped={before})")
+
         menu.deactivate()
         menu.popdown()
-        if menu.get_mapped():
-            trace("  still mapped after deactivate+popdown; hiding")
-            menu.hide()
-        trace(f"  mapped after close: {menu.get_mapped()}")
+
+        if isinstance(toplevel, Gtk.Window) and toplevel.get_mapped():
+            trace("  toplevel still mapped; hiding it directly")
+            toplevel.hide()
+
+        after = toplevel.get_mapped() if isinstance(toplevel, Gtk.Window) else None
+        trace(f"  toplevel mapped after close: {after}")
 
     def _on_pick_pet(self, item, pet_id: str) -> None:
         if not item.get_active():
