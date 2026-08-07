@@ -280,6 +280,7 @@ class Overlay(Gtk.Window):
         self.desktop_watcher: desktop.NotifyWatcher | None = None
         self.desktop_checked_at = 0.0
         self.desktop_written_at = 0.0
+        self.cpu_sampled_at = 0.0
         # A short-lived bubble override, for telling the user how a click went.
         self.flash_text = ""
         self.flash_until = 0.0
@@ -404,12 +405,29 @@ class Overlay(Gtk.Window):
 
     def _poll_state(self) -> bool:
         self._refresh_desktop()
+        self._sample_cpu()
         # Re-aggregated every time, not only when the file changes: dwells
         # expire on the clock, so the same file yields a different state later.
         snapshot = state.aggregate()
         self._adopt(snapshot)
         self._maybe_exit(snapshot)
         return True
+
+    def _sample_cpu(self) -> None:
+        """Watch what the session processes are actually doing.
+
+        The overlay is the only long-lived piece, so it is the only thing that
+        can take the second reading a rate needs. `state.sample_cpu` decides
+        whether enough time has passed to bother.
+        """
+        now = time.monotonic()
+        if now - self.cpu_sampled_at < state.CPU_SAMPLE_SECONDS:
+            return
+        self.cpu_sampled_at = now
+        try:
+            state.sample_cpu()
+        except OSError:
+            pass
 
     # -------------------------------------------------------- Claude Desktop
 

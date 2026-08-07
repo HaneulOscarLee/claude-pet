@@ -121,6 +121,65 @@ def liveness_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def cpu_checks() -> list[tuple[str, bool]]:
+    """`running` is dropped once the process stops doing anything.
+
+    `Stop` is the clean way out of `running`, but an interrupted turn never
+    sends one, and the pet then sat on "working" until the five-minute backstop
+    expired with nothing running.
+
+    The verdict is read off `busy_at`, which lives on the session in the state
+    file rather than in the overlay's memory -- otherwise `claude-pet status`
+    would reach a different answer than the pet it is reporting on.
+    """
+    results = []
+
+    def running(age: float, idle_for: float) -> dict:
+        return {
+            "state": "running", "ts": NOW - age,
+            "busy_at": NOW - idle_for, "locator": {"claude_pid": 4242},
+        }
+
+    results.append(
+        ("stale running with an idle process goes idle",
+         state.effective_state(running(60, 60), NOW) == "idle")
+    )
+    results.append(
+        ("stale running with a busy process stays",
+         state.effective_state(running(60, 1), NOW) == "running")
+    )
+    # Nothing is second-guessed before the window is up, whatever the process
+    # is doing -- a pause between tool calls is not the end of a turn.
+    results.append(
+        ("fresh running is left alone", state.effective_state(running(5, 60), NOW) == "running")
+    )
+    # Sessions written before this existed carry no `busy_at`, and must fall
+    # back to the backstop rather than be declared idle on no evidence.
+    without = {"state": "running", "ts": NOW - 60, "locator": {"claude_pid": 4242}}
+    results.append(
+        ("no observation means no verdict", state.effective_state(without, NOW) == "running")
+    )
+    # Only `running` is second-guessed. `waiting` is a claim about the user,
+    # and an idle Claude is exactly what being blocked on you looks like.
+    blocked = {"state": "waiting", "ts": NOW - 600, "busy_at": NOW - 600,
+               "locator": {"claude_pid": 4242}}
+    results.append(
+        ("idle process still needs you", state.effective_state(blocked, NOW) == "waiting")
+    )
+    # The backstop still applies on its own.
+    results.append(
+        ("backstop still fires", state.effective_state(running(400, 1), NOW) == "idle")
+    )
+
+    # A hook event is proof of work, so it has to refresh the observation --
+    # otherwise a long turn would be judged idle between samples.
+    fresh = state.effective_state(
+        {"state": "running", "ts": NOW, "busy_at": NOW, "locator": {"claude_pid": 4242}}, NOW
+    )
+    results.append(("an event counts as work", fresh == "running"))
+    return results
+
+
 def main() -> int:
     failures = 0
     # These cases are about dwells and priority, not liveness, so the liveness
@@ -149,7 +208,7 @@ def main() -> int:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
 
-    live_results = liveness_checks()
+    live_results = liveness_checks() + cpu_checks()
     for name, ok in live_results:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")

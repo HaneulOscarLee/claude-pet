@@ -423,9 +423,15 @@ def cmd_status(_args: argparse.Namespace) -> int:
         reported = str(session.get("state"))
         speaks_for = state.effective_state(session, now)
         shown = reported if speaks_for == reported else f"{reported}→{speaks_for}"
+
+        # Which event set it, and how long ago. Without this a pet stuck on
+        # "working" gives you nothing to go on.
+        age = now - session.get("ts", now)
+        via = session.get("event")
+        stamp = f"{via or '?'} {age:.0f}s ago"
         print(
             f"  {label:<14}  {shown:<14} "
-            f"{detail:<28} pid={where or '?'}{note}"
+            f"{detail:<28} pid={where or '?':<8} {stamp}{note}"
         )
     return 0
 

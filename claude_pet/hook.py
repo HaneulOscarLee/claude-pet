@@ -95,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
         "detail": _detail(event, payload) if pet_state else None,
         "cwd": str(payload.get("cwd") or "") or None,
         "locator": locate.locator() if event in LOCATE_ON else None,
+        # Which event put the session where it is. Costs a word in the state
+        # file and turns "why does it say working?" into one `status` call.
+        "event": event,
     }
     # Omitting `state` entirely leaves the stored one alone; passing None
     # deletes the session.

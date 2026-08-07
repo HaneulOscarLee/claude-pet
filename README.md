@@ -205,6 +205,31 @@ session finishes while others are still working, that session says `done` for
 its 20 seconds and then hands the pet back — it does not drag everything to
 idle while real work is going on.
 
+`running` gets a second opinion, because it is the one state that can be left
+behind: **a turn you interrupt sends no `Stop`**, and the pet would otherwise
+sit on **working** until a five-minute backstop expired with nothing running.
+So the pet also watches whether the session's process is doing anything —
+Claude Code animates a spinner while it works, so a working session burns
+measurable CPU (~0.17s per second here) and one sitting at its prompt does not
+(~0.005s). After 45 seconds of a stale `running` on a process that has done
+nothing, the pet gives up on it and goes idle.
+
+Only `running` is second-guessed. `waiting` is a claim about *you*, not about
+the process, and an idle Claude is exactly what being blocked on you looks
+like. If the answer cannot be observed — no reading yet, process gone — nothing
+is concluded and the backstop applies as before.
+
+`claude-pet status` shows what each session reported, what it still counts for,
+and which hook event put it there, which is where to start when the pet is
+showing something you do not expect:
+
+```console
+$ claude-pet status
+sessions  :
+  ed0f2f9c        running        Bash        pid=3050615  PreToolUse 0s ago
+  40660d1a        waving→idle                pid=3072258  SessionStart 11816s ago
+```
+
 Several Claude sessions at once collapse into the most urgent state:
 
 ```

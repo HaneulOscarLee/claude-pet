@@ -131,6 +131,92 @@ def any_claude_running() -> bool:
     return found
 
 
+#: A `running` session whose process shows no sign of work for this long is
+#: treated as finished, well before the blunt backstop above.
+#:
+#: `Stop` is the clean way out of `running`, but it does not always come: an
+#: interrupted turn ends without one, and then the pet sat on "working" for the
+#: full five minutes with nothing running. Long enough to ride out a pause
+#: between tool calls, short enough that a stale `running` heals while you are
+#: still looking at it.
+IDLE_CPU_SECONDS = 45.0
+
+#: CPU seconds per wall second below which a Claude process is doing nothing.
+#: Measured: a session sitting at its prompt idles at 0.002-0.008, one mid-turn
+#: runs at ~0.17. The gap is that wide because Claude Code animates a spinner
+#: while it works, so "burning CPU" and "showing itself as busy" are the same
+#: thing -- which is exactly the question being asked.
+IDLE_CPU_RATE = 0.02
+
+#: How often the overlay records what each session's process has been doing.
+#: A rate needs two readings, and a wide gap makes the rate steadier -- there
+#: is no hurry, since nothing is judged until a state is already stale.
+CPU_SAMPLE_SECONDS = 10.0
+
+_CLOCK_TICKS = float(os.sysconf("SC_CLK_TCK") or 100)
+
+
+def _cpu_of(pid: int) -> float | None:
+    """Total CPU seconds this process has used, or None if it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stream:
+            # The comm field can contain spaces and brackets, so split after it.
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / _CLOCK_TICKS
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def sample_cpu() -> None:
+    """Record what each live session's process has been up to.
+
+    Written into the state file rather than kept in the overlay's memory, so
+    that `claude-pet status` reaches the same verdict as the pet and a
+    restarted overlay does not forget what it had already observed.
+
+    `busy_at` is the last moment a session was known to be doing something --
+    set here when its process burns CPU, and by `update` on any hook event,
+    since an arriving event is itself proof of work.
+    """
+    with _locked():
+        data = read()
+        now = time.time()
+        changed = False
+
+        for session in data.get("sessions", {}).values():
+            if not isinstance(session, dict):
+                continue
+            locator = session.get("locator")
+            pid = locator.get("claude_pid") if isinstance(locator, dict) else None
+            if not isinstance(pid, int):
+                continue
+
+            sampled_at = session.get("cpu_at")
+            if isinstance(sampled_at, (int, float)) and now - sampled_at < CPU_SAMPLE_SECONDS:
+                continue
+
+            total = _cpu_of(pid)
+            if total is None:
+                continue
+
+            previous = session.get("cpu_total")
+            if isinstance(previous, (int, float)) and isinstance(sampled_at, (int, float)):
+                rate = (total - previous) / max(now - sampled_at, 1e-6)
+                if rate >= IDLE_CPU_RATE:
+                    session["busy_at"] = now
+            else:
+                # First sighting proves nothing either way, so assume work.
+                session["busy_at"] = now
+
+            session["cpu_total"] = total
+            session["cpu_at"] = now
+            changed = True
+
+        if changed:
+            data["updated"] = now
+            _write(data)
+
+
 def is_alive(session: dict[str, Any], now: float) -> bool:
     """Whether a session should still be counted.
 
@@ -228,6 +314,9 @@ def update(session_id: str, **fields: Any) -> dict[str, Any]:
             session.update({key: value for key, value in fields.items() if value is not None})
             session["ts"] = now
             session["seen"] = now
+            # A hook event is itself proof the session is doing something, and
+            # a far better one than sampling ever gives.
+            session["busy_at"] = now
             sessions[session_id] = session
 
         data["updated"] = now
@@ -267,8 +356,20 @@ def effective_state(session: dict[str, Any], now: float) -> str:
     if not isinstance(dwell, (int, float)):
         dwell = DWELL_SECONDS.get(reported)
 
-    if dwell is not None and now - session.get("ts", 0.0) > dwell:
+    age = now - session.get("ts", 0.0)
+    if dwell is not None and age > dwell:
         return "idle"
+
+    # `running` is the one state worth second-guessing, because it is the one
+    # that gets left behind: a turn ended by an interrupt sends no `Stop`, and
+    # the pet then sat on "working" for the whole five-minute backstop. Only
+    # `running` -- `waiting` is a claim about the user, not about the process,
+    # and an idle Claude is exactly what it looks like.
+    if reported == "running" and age > IDLE_CPU_SECONDS:
+        busy_at = session.get("busy_at")
+        if isinstance(busy_at, (int, float)) and now - busy_at > IDLE_CPU_SECONDS:
+            return "idle"
+
     return reported
 
 
