@@ -238,6 +238,9 @@ claude-pet add guga --codex-home        # install into ~/.codex/pets instead
 
 claude-pet hatch ~/Pictures/cat.png     # build a pack from any image
 
+claude-pet remove dario                 # delete a pack (-y to skip the prompt)
+claude-pet remove dario guga -y         # or several
+
 claude-pet list                          # what is installed
 claude-pet use tennis-ball               # pick the active pack
 claude-pet preview tennis-ball           # dump all animation rows to a PNG
@@ -352,7 +355,7 @@ so this is how you get a picture of the window.
 |---|---|
 | click | **jump to that session** (see below), or pin the bubble if there is nowhere to jump |
 | drag | move the pet — mid-stride is fine; it stops the moment you grab it |
-| right-click | switch pack; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
+| right-click | switch pack; open the gallery; toggle wandering, notifications, start-with-Claude and quit-when-no-sessions; quit |
 
 Clicks land only on the sprite itself — the rest of the window is
 click-through, so the pet never steals a click meant for what is underneath.

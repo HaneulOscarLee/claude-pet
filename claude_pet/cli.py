@@ -162,6 +162,62 @@ def cmd_hatch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_remove(args: argparse.Namespace) -> int:
+    import shutil
+
+    bundled = config.bundled_pets()
+    failures = 0
+
+    for pet_id in args.pet_ids:
+        # The same id can be installed in more than one search path -- most
+        # often ~/.claude/pets and ~/.codex/pets. "Remove it" means all of them,
+        # or the pack simply reappears in the list.
+        copies = [
+            root / pet_id
+            for root in config.pet_search_paths()
+            if (root / pet_id / "pet.json").is_file() and root != bundled
+        ]
+        if not copies:
+            if (bundled / pet_id / "pet.json").is_file():
+                print(
+                    f"claude-pet: {pet_id} ships with claude-pet and would come back "
+                    "on the next update; leaving it alone",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"claude-pet: {pet_id} is not installed", file=sys.stderr)
+            failures += 1
+            continue
+
+        # A hatched pack is not re-downloadable, so ask before deleting one.
+        if not args.yes and sys.stdin.isatty():
+            where = ", ".join(str(path) for path in copies)
+            if input(f"remove {pet_id} ({where})? [y/N] ").strip().lower() not in {"y", "yes"}:
+                print(f"  kept {pet_id}")
+                continue
+
+        removed = False
+        for directory in copies:
+            try:
+                shutil.rmtree(directory)
+            except OSError as exc:
+                print(f"claude-pet: could not remove {directory}: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            print(f"removed  {pet_id}  ({directory})")
+            removed = True
+        if not removed:
+            continue
+
+        if config.load().get("pet") == pet_id:
+            config.update(pet=None)
+            print("  it was the active pet; the next one found will be used")
+            if _overlay_pid():
+                print("  apply with: claude-pet restart")
+
+    return 1 if failures else 0
+
+
 def cmd_use(args: argparse.Namespace) -> int:
     available = config.discover()
     if args.pet_id not in available:
@@ -920,6 +976,11 @@ def build_parser() -> argparse.ArgumentParser:
     hatch_parser.add_argument("--codex-home", action="store_true")
     hatch_parser.set_defaults(func=cmd_hatch)
 
+    remove = subparsers.add_parser("remove", help="delete installed packs")
+    remove.add_argument("pet_ids", nargs="+", metavar="PET_ID")
+    remove.add_argument("-y", "--yes", action="store_true", help="do not ask")
+    remove.set_defaults(func=cmd_remove)
+
     use = subparsers.add_parser("use", help="choose the active pack")
     use.add_argument("pet_id")
     use.set_defaults(func=cmd_use)
@@ -1054,7 +1115,8 @@ def cmd_complete(args: argparse.Namespace) -> int:
 
     if cword <= 1:
         candidates = _subcommands()
-    elif previous == "--pet" or (subcommand in {"use", "preview"} and cword == 2):
+    elif previous == "--pet" or subcommand in {"use", "preview", "remove"}:
+        # `remove` takes several, so every position after it completes packs.
         candidates = list(config.discover())
     elif subcommand == "set" and cword == 2:
         candidates = sorted(config.DEFAULTS)

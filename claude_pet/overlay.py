@@ -80,6 +80,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
         "menu.exit_idle": "Quit when no sessions",
+        "menu.browse": "Get more pets…",
         "menu.quit": "Quit",
         "jump.hint": "click to jump",
     },
@@ -94,6 +95,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
         "menu.exit_idle": "세션 없으면 종료",
+        "menu.browse": "펫 더 받기…",
         "menu.quit": "종료",
         "jump.hint": "클릭하면 이동",
     },
@@ -788,6 +790,11 @@ class Overlay(Gtk.Window):
                 self._menu_row(pet_id, pick, active=pet_id == self.view.pet.id), False, False, 0
             )
 
+        def browse(_button) -> None:
+            close()
+            self._open_gallery()
+
+        box.pack_start(self._menu_row(self.labels["menu.browse"], browse), False, False, 0)
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
 
         for key, label, default in (
@@ -830,6 +837,24 @@ class Overlay(Gtk.Window):
         self.menu = popup
         self.menu_opened_at = time.monotonic()
         trace(f"menu popped, xid={_xid(popup)}")
+
+    def _open_gallery(self) -> None:
+        """Open the pack gallery in the user's browser."""
+        from . import registry
+
+        url = registry.api_base()
+        try:
+            Gtk.show_uri_on_window(None, url, Gdk.CURRENT_TIME)
+            trace(f"opened {url}")
+            return
+        except GLib.Error as exc:
+            trace(f"show_uri failed ({exc}); falling back to xdg-open")
+        try:
+            subprocess.Popen(  # noqa: S603,S607 - fixed argv
+                ["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except OSError:
+            self._flash(f"could not open {url}")
 
     def _place_menu(self, popup: Gtk.Window, event) -> None:
         """Put the popup above the pet, kept inside the work area."""
