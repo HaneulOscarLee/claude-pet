@@ -180,7 +180,8 @@ stays in the foreground, which is what you want for debugging.
 | `UserPromptSubmit` | `running` | working |
 | `PreToolUse` / `PostToolUse` | `running` | working · *tool name* |
 | `PostToolUse` reporting an error | `failed` | failed |
-| `Notification` | `waiting` | needs you · *Claude's own message* |
+| `Notification`, blocked | `waiting` | needs you · *Claude's own message* |
+| `Notification`, only "you haven't typed" | — | ignored, see below |
 | `Stop` | `review` | done |
 | `SubagentStop` | `running` | working · subagent finished |
 | `SessionEnd` | — | the session is forgotten |
@@ -204,6 +205,16 @@ A dwell belongs to **the session that reported it**, not to the pet. When one
 session finishes while others are still working, that session says `done` for
 its 20 seconds and then hands the pet back — it does not drag everything to
 idle while real work is going on.
+
+**needs you** is reserved for Claude actually being blocked. Claude Code sends
+its `Notification` hook for two unrelated situations: it wants permission and
+cannot go on, or a turn ended and you have not typed since. Only the first is
+worth a pet asking for you — the second arrives about a minute after the pet
+has already said **done**, and since `waiting` never times out it left the pet
+demanding attention for the sole offence of you reading its output. So a
+notification arriving after `Stop` is ignored. The same wording *during* a turn
+still counts, because then it means Claude has asked you something and is
+waiting on the answer.
 
 `running` gets a second opinion, because it is the one state that can be left
 behind: **a turn you interrupt sends no `Stop`**, and the pet would otherwise

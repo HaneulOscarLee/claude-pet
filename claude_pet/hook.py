@@ -21,6 +21,20 @@ LOCATE_ON = {"SessionStart", "UserPromptSubmit"}
 #: Sentinel: report the detail but leave the state as it was.
 KEEP = "__keep__"
 
+#: `Notification` covers two situations that could hardly be less alike.
+#:
+#: Claude Code sends one when it is genuinely blocked -- it wants permission
+#: and cannot go on without an answer -- and another about a minute after a
+#: turn ends simply because nobody has typed since. Only the first is `needs
+#: you`. The second arrives long after `Stop` has been reported and shown, and
+#: `waiting` deliberately never times out, so treating them alike left the pet
+#: demanding attention for the sole offence of you reading its output.
+#:
+#: Matching on the text is safe here in a way it is not for a desktop
+#: notification: this is Claude Code's own fixed string, not localised prose
+#: from another application.
+IDLE_NOTIFICATION = "waiting for your input"
+
 #: Hook event -> pet state. `None` means "forget this session", `KEEP` means
 #: "this says nothing about whether Claude is working".
 EVENT_STATES: dict[str, str | None] = {
@@ -58,6 +72,24 @@ def _detail(event: str, payload: dict[str, Any]) -> str:
     return ""
 
 
+def _is_idle_nudge(payload: dict[str, Any], session_id: str) -> bool:
+    """Whether this `Notification` is only "you have not typed yet".
+
+    The same wording means two things depending on when it arrives. After
+    `Stop` the turn is over, the pet has already said `done`, and this is
+    Claude noting the silence since -- nothing the user does not already know.
+    Arriving mid-turn it means Claude has asked a question and cannot continue,
+    which is precisely what `needs you` is for.
+
+    So the message alone does not decide it; whether the turn had ended does.
+    """
+    message = str(payload.get("message") or "").lower()
+    if IDLE_NOTIFICATION not in message:
+        return False
+    session = state.read().get("sessions", {}).get(session_id)
+    return isinstance(session, dict) and session.get("turn_over") is True
+
+
 def _tool_failed(payload: dict[str, Any]) -> bool:
     """Best-effort detection of a failed tool call in a PostToolUse payload."""
     response = payload.get("tool_response")
@@ -91,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
         pet_state = "failed"
 
     session_id = str(payload.get("session_id") or "default")
+
+    if event == "Notification" and _is_idle_nudge(payload, session_id):
+        return 0
     fields: dict[str, Any] = {
         "detail": _detail(event, payload) if pet_state else None,
         "cwd": str(payload.get("cwd") or "") or None,
@@ -99,6 +134,14 @@ def main(argv: list[str] | None = None) -> int:
         # file and turns "why does it say working?" into one `status` call.
         "event": event,
     }
+
+    # Tracked rather than inferred from the last event, because events keep
+    # arriving after a turn ends -- a background subagent finishing, say -- and
+    # any of them would otherwise look like the turn had resumed.
+    if event == "Stop":
+        fields["turn_over"] = True
+    elif event == "UserPromptSubmit":
+        fields["turn_over"] = False
     # Omitting `state` entirely leaves the stored one alone; passing None
     # deletes the session.
     if pet_state != KEEP:

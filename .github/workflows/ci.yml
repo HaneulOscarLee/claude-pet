@@ -38,6 +38,9 @@ jobs:
       - name: Claude Desktop tests
         run: python3 tests/test_desktop.py
 
+      - name: Hook event tests
+        run: python3 tests/test_hook.py
+
       - name: Bundled pack parses
         run: |
           python3 - <<'PY'
