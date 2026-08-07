@@ -44,6 +44,15 @@ def is_git_checkout(root: Path | None = None) -> bool:
     return ((root or install_root()) / ".git").exists()
 
 
+def releases_url() -> str:
+    return f"https://github.com/{REPO}/releases/latest"
+
+
+def is_system_install(root: Path | None = None) -> bool:
+    """A package-managed install: owned by root, so we must not rewrite it."""
+    return not os.access(root or install_root(), os.W_OK)
+
+
 def _git(*args: str, root: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(  # noqa: S603 - fixed argv
         ["git", "-C", str(root or install_root()), *args],
@@ -152,9 +161,30 @@ def check() -> dict[str, str | bool]:
 def update(check_only: bool = False) -> int:
     root = install_root()
     current = installed_version()
-    kind = "git checkout" if is_git_checkout(root) else "tarball install"
+    if is_system_install(root):
+        kind = "system package"
+    elif is_git_checkout(root):
+        kind = "git checkout"
+    else:
+        kind = "tarball install"
     print(f"install : {root}  ({kind})")
     print(f"version : {current}")
+
+    # A package-managed install belongs to the package manager. Rewriting /usr
+    # behind its back would leave dpkg's idea of the files wrong.
+    if is_system_install(root) and not check_only:
+        try:
+            latest = latest_sha()[:7]
+        except UpdateError as exc:
+            print(f"claude-pet: {exc}")
+            return 1
+        if latest == current:
+            print("already up to date")
+            return 0
+        print(f"latest  : {latest}")
+        print("this is a system package; install the new .deb from:")
+        print(f"  {releases_url()}")
+        return 0
 
     if check_only:
         try:

@@ -1038,7 +1038,13 @@ class Overlay(Gtk.Window):
 
     def _apply_update(self) -> None:
         """Hand the update to a detached process: it will stop and respawn us."""
-        from . import launch
+        from . import launch, update
+
+        # A packaged install belongs to the package manager, so the most useful
+        # thing the button can do is open the page with the new .deb on it.
+        if update.is_system_install():
+            self._open_url(update.releases_url())
+            return
 
         self._flash(self.labels["menu.updating"], seconds=60)
         try:
@@ -1074,7 +1080,9 @@ class Overlay(Gtk.Window):
         """Open the pack gallery in the user's browser."""
         from . import registry
 
-        url = registry.api_base()
+        self._open_url(registry.api_base())
+
+    def _open_url(self, url: str) -> None:
         try:
             Gtk.show_uri_on_window(None, url, Gdk.CURRENT_TIME)
             trace(f"opened {url}")

@@ -54,6 +54,23 @@ are off by default anyway.
 
 ## Install
 
+### Without a terminal (Debian / Ubuntu)
+
+Download the `.deb` from
+[Releases](https://github.com/HaneulOscarLee/claude-pet/releases/latest) and
+open it. GNOME Software installs it and pulls in GTK, Pillow and `wmctrl` for
+you.
+
+Then launch **claude-pet** once from your applications menu. That finishes the
+user side of the setup — a sprite pack, the Claude Code hooks in your own
+`~/.claude/settings.json`, tab completion — and starts the pet. Nothing to type.
+
+After that, everything day-to-day is in the pet's right-click menu: install and
+remove pets, check for updates, toggle behaviour. Updates for a packaged install
+come from Releases, and the menu's update entry opens that page.
+
+### One line, any distro
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HaneulOscarLee/claude-pet/main/install.sh | bash
 ```
@@ -559,6 +576,7 @@ about **33 ms** per tool call.
 | `claude_pet/registry.py` | codex-pets.net API client and installer |
 | `claude_pet/config.py` | settings and pack discovery |
 | `claude_pet/cli.py` | command line interface |
+| `packaging/build-deb.sh` | builds the .deb published on Releases |
 | `completions/claude-pet.bash` | tab completion, fed by `claude-pet _complete` |
 | `tools/make_default_pack.py` | draws the bundled pack in `assets/pets/pocket` |
 | `tests/test_aggregate.py` | multi-session aggregation and dwell behaviour |

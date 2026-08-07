@@ -293,6 +293,60 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_start(args: argparse.Namespace) -> int:
+    """What the desktop entry runs: make it work, then show the pet.
+
+    Everything here is user-scoped and needs no password, so clicking the app
+    icon once is a complete setup. The steps that need root are left to whatever
+    installed the package.
+    """
+    from . import launch
+
+    if not any(
+        config.bundled_pets() not in directory.parents
+        for directory in config.discover().values()
+    ):
+        try:
+            registry_install = _install_default_pack()
+        except PetError as exc:
+            print(f"claude-pet: {exc}", file=sys.stderr)
+            registry_install = None
+        if registry_install is None:
+            print("using the bundled pack")
+
+    if _hook_events_installed() < len(HOOK_EVENTS):
+        cmd_install_hooks(argparse.Namespace(project=False))
+    if not completion_installed():
+        _install_completion()
+    if not launcher_on_path():
+        _link_launcher()
+
+    if _overlay_pid() is not None:
+        print("the pet is already running")
+        return 0
+    if args.foreground:
+        from . import overlay
+
+        return overlay.run(None)
+    pid = launch.spawn_detached(reason="start")
+    if pid is None:
+        print("claude-pet: could not start the overlay", file=sys.stderr)
+        return 1
+    print(f"pet running (pid {pid})")
+    return 0
+
+
+def _install_default_pack():
+    from . import registry, sprites
+
+    print(f"installing pack {DEFAULT_PACK}...")
+    installed = registry.install(DEFAULT_PACK, config.claude_home() / "pets")
+    sprites.load_pet(installed["directory"])
+    config.update(pet=DEFAULT_PACK)
+    print(f"  installed {installed['id']}")
+    return installed["id"]
+
+
 def cmd_stop(_args: argparse.Namespace) -> int:
     pid = _overlay_pid()
     if pid is None:
@@ -996,6 +1050,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--detach", action="store_true", help="run in the background, surviving this terminal"
     )
     run.set_defaults(func=cmd_run)
+
+    start = subparsers.add_parser(
+        "start", help="set up anything missing and show the pet (used by the app icon)"
+    )
+    start.add_argument("--foreground", action="store_true", help="do not detach")
+    start.set_defaults(func=cmd_start)
 
     restart = subparsers.add_parser("restart", help="restart the overlay (detached)")
     restart.add_argument("--pet")

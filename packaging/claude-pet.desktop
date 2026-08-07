@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=claude-pet
+GenericName=Claude Code desktop pet
+Comment=A desktop pet that shows what Claude Code is doing
+# `start` finishes any user-scoped setup that is still missing and then shows
+# the pet, so clicking this once is the whole installation.
+Exec=claude-pet start
+Icon=claude-pet
+Terminal=false
+Categories=Utility;
+Keywords=claude;pet;overlay;status;
+StartupNotify=false
