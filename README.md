@@ -596,7 +596,7 @@ When the pet is showing **needs you**, **done** or **failed**, the bubble adds
 | Setup | What happens |
 |---|---|
 | session started in **Claude Desktop** | brings the app forward |
-| Claude running inside **tmux** | switches to the exact pane — precise and reliable |
+| Claude running inside **tmux** | raises the terminal *and* switches to the exact pane |
 | **X11 or XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window (`setup` installs `wmctrl`) |
 | **Wayland-native** terminal that implements `org.freedesktop.Application` | asks the terminal to present itself |
 | any other **Wayland-native** terminal | not possible — the pet says so rather than pretending |
@@ -644,6 +644,25 @@ inside tmux — the pet then jumps to the exact pane:
 tmux new -s work
 claude
 ```
+
+tmux is the only way to land on a *particular* place inside a terminal. Tabs
+and splits are widgets inside the application, not windows, so nothing outside
+can address them: Terminator's D-Bus interface will happily list its terminals
+and tell you which one has focus, but offers no way to select one, and its
+direct tab-switching shortcuts are unbound by default.
+
+Raising the window and selecting the pane are separate jobs, and a tmux session
+inside a terminal gets both. Finding that window takes a detour: inside tmux the
+session's own ancestry reads `bash → tmux: server → systemd`, and the server is
+detached from every terminal and owns no window at all. The terminal is the
+parent of the tmux *client*, which is asked for at the moment you click, since
+you may have detached and reattached somewhere else since.
+
+One case stays imprecise. A terminal that serves several windows from a single
+process — Terminator does — gives all of them the same `_NET_WM_PID`, and
+nothing distinguishes them from outside. With one window open you land exactly
+right; with several, the pane is still exact but the window raised may be a
+sibling.
 
 XWayland caveat: on a HiDPI screen an XWayland window can look slightly softer
 than a native one. If that bothers you, `--undo` and use tmux instead.

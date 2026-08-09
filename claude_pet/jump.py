@@ -91,8 +91,59 @@ def _tmux_jump(locator: dict[str, Any]) -> JumpResult | None:
     return JumpResult(False, f"tmux could not select {pane}")
 
 
+def _tmux_client_pids(locator: dict[str, Any]) -> list[int]:
+    """Pids of whatever is currently displaying this tmux pane.
+
+    A session inside tmux has no route to its terminal through its own
+    ancestry. The shell's parent is the tmux *server*, which is detached from
+    every terminal and owns no window -- so the recorded chain reads
+    `bash -> tmux: server -> systemd` and matches nothing on screen. The
+    terminal is the parent of the tmux *client*, and which client that is can
+    change at any time (detach here, attach there), so it is asked at the
+    moment of the jump rather than recorded alongside the pane.
+    """
+    pane = locator.get("tmux_pane")
+    if not pane or not shutil.which("tmux"):
+        return []
+
+    argv = ["tmux"]
+    socket = locator.get("tmux_socket")
+    if socket:
+        argv += ["-S", str(socket)]
+    try:
+        listing = subprocess.run(  # noqa: S603 - fixed argv
+            argv + ["list-clients", "-t", str(pane), "-F", "#{client_pid}"],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    from . import locate
+
+    found: list[int] = []
+    for token in listing.split():
+        if not token.isdigit():
+            continue
+        pid = int(token)
+        for _ in range(8):
+            found.append(pid)
+            parent = locate._parent_of(pid)
+            if parent is None or parent <= 1:
+                break
+            pid = parent
+    return found
+
+
 def _x11_window_for(pids: list[int]) -> str | None:
-    """Window id owned by one of `pids`, using whatever tool is installed."""
+    """Window id owned by one of `pids`, using whatever tool is installed.
+
+    The first match, which is exact for a terminal that runs a process per
+    window and a guess for one that does not. Terminator serves every window
+    it has from a single process, so all of them carry the same `_NET_WM_PID`
+    and there is nothing here to tell them apart -- no property, and no API on
+    its side either. With one window open this is right; with several it may
+    raise a sibling of the one wanted.
+    """
     if shutil.which("wmctrl"):
         try:
             listing = subprocess.run(  # noqa: S603
@@ -121,6 +172,9 @@ def _x11_window_for(pids: list[int]) -> str | None:
 
 def _x11_jump(locator: dict[str, Any]) -> JumpResult | None:
     pids = [pid for pid in locator.get("pids") or [] if isinstance(pid, int)]
+    # For a tmux session these are the only pids that lead anywhere near a
+    # window, and the recorded ones never do.
+    pids += _tmux_client_pids(locator)
     if not pids:
         return None
     if not (shutil.which("wmctrl") or shutil.which("xdotool")):
@@ -209,10 +263,30 @@ def to_session(locator: dict[str, Any] | None) -> JumpResult:
     if not locator:
         return JumpResult(False, "no location recorded for that session")
 
-    for attempt in (_desktop_jump, _tmux_jump, _x11_jump, _dbus_jump):
-        result = attempt(locator)
-        if result is not None:
-            return result
+    # Exclusive: a session in the Claude Desktop app has no terminal window to
+    # raise and no pane to select, so none of the rest can apply.
+    result = _desktop_jump(locator)
+    if result is not None:
+        return result
+
+    # Raising the window and selecting the pane are separate jobs, and tmux
+    # inside a terminal needs both. tmux moves its own pane without touching
+    # window stacking, so on its own it would land you on the right pane of a
+    # window that is still behind everything else -- and say it had taken you
+    # there. The window goes first so the pane switch happens in view.
+    raised = None
+    for attempt in (_x11_jump, _dbus_jump):
+        raised = attempt(locator)
+        if raised is not None:
+            break
+
+    pane = _tmux_jump(locator)
+    if pane is not None:
+        if pane.ok and raised is not None and not raised.ok:
+            return JumpResult(True, f"{pane.message}, but the window stayed put")
+        return pane
+    if raised is not None:
+        return raised
 
     if locator.get("tmux_pane"):
         return JumpResult(False, "tmux is not installed")

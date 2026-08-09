@@ -187,6 +187,60 @@ def notification_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def tmux_window_checks() -> list[tuple[str, bool]]:
+    """A tmux session needs the pane selected *and* the window raised.
+
+    They are separate jobs and tmux only does the first: it moves its own pane
+    without touching window stacking, so on its own it lands you on the right
+    pane of a window that is still behind everything else -- and says it took
+    you there.
+
+    Finding that window is its own problem. Inside tmux the recorded ancestry
+    reads `bash -> tmux: server -> systemd`; the server is detached from every
+    terminal and owns no window, so the terminal is reached through the tmux
+    *client* instead.
+    """
+    results = []
+    calls = []
+    saved = {n: getattr(jump, n) for n in ("_desktop_jump", "_x11_jump", "_dbus_jump", "_tmux_jump")}
+
+    def stub(name, result):
+        def probe(_locator):
+            calls.append(name)
+            return result
+        return probe
+
+    ok = jump.JumpResult(True, "raised the terminal")
+    pane = jump.JumpResult(True, "switched to %0")
+    locator = {"tmux_pane": "%0", "pids": [1, 2]}
+    try:
+        jump._desktop_jump = stub("desktop", None)
+        jump._dbus_jump = stub("dbus", None)
+        jump._x11_jump = stub("x11", ok)
+        jump._tmux_jump = stub("tmux", pane)
+        result = jump.to_session(locator)
+        results.append(("the window route runs for a tmux session", "x11" in calls))
+        results.append(("...and so does the pane route", "tmux" in calls))
+        results.append(("the window is raised first", calls.index("x11") < calls.index("tmux")))
+        results.append(("the pane has the last word", result.message == "switched to %0"))
+
+        calls.clear()
+        jump._x11_jump = stub("x11", jump.JumpResult(False, "could not raise the terminal"))
+        result = jump.to_session(locator)
+        results.append(
+            ("a pane switch into a buried window says so", "stayed put" in result.message)
+        )
+
+        calls.clear()
+        jump._x11_jump = stub("x11", None)
+        result = jump.to_session(locator)
+        results.append(("tmux alone still works", result.ok and result.message == "switched to %0"))
+    finally:
+        for name, function in saved.items():
+            setattr(jump, name, function)
+    return results
+
+
 def jump_checks() -> list[tuple[str, bool]]:
     """A session inside the app must not be sent down the terminal routes."""
     results = []
@@ -214,6 +268,7 @@ def main() -> int:
         ("dwells", dwell_checks()),
         ("notifications", notification_checks()),
         ("jump", jump_checks()),
+        ("tmux windows", tmux_window_checks()),
     ]
     total = 0
     for label, results in groups:
