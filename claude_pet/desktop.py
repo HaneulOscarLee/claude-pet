@@ -168,7 +168,17 @@ def focus() -> tuple[bool, str]:
     Running the launcher again reaches the *existing* instance, and an
     application is always allowed to raise itself -- the same trick the D-Bus
     route in `jump` uses for GApplication terminals, in the only form this app
-    offers.
+    offers. What the app then does with the window is the app's own handler,
+    which does cover a minimised one:
+
+        mainWindow.isVisible() || mainWindow.show(),
+        mainWindow.isMinimized() && mainWindow.restore(),
+        mainWindow.focus()
+
+    Reported not to come back from minimised, which is not yet explained. Note
+    that no activation token can be supplied from here: a compositor only
+    mints one against the serial of a real input event, and this overlay runs
+    on XWayland, whose events carry no Wayland serial.
     """
     if main_pid() is None:
         return False, "Claude Desktop is not running"

@@ -226,8 +226,26 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
     and the pet would never notice everything had gone away. So the recorded
     Claude pid is verified directly: if that process is gone, so is the session.
     """
-    # `seen` when there is one: an entry refreshed on a timer stays alive
-    # without its dwell being re-armed, which `ts` alone could not express.
+    locator = session.get("locator")
+    pid = locator.get("claude_pid") if isinstance(locator, dict) else None
+
+    if isinstance(pid, int):
+        # Claude Desktop's own entry is watched the same way, but its process
+        # is not called `claude`, so the locator names what to expect. The comm
+        # check also guards against the pid being reused by something unrelated
+        # between the session dying and us looking at it.
+        recorded = locator.get("comm")
+        expected = recorded if isinstance(recorded, str) and recorded else CLAUDE_COMM
+
+        # Age deliberately says nothing here. A session sitting at its prompt
+        # overnight is idle, not gone, and the TTL used to drop it anyway --
+        # taking the pet with it if it was the last one, and leaving it dead
+        # until a brand new session was started.
+        return _comm_of(pid) == expected
+
+    # No pid recorded, which is the case for entries written before pids were.
+    # Nothing better to go on than age and whether any Claude exists at all:
+    # trusting them outright kept the pet alive long after everything closed.
     stamps = [
         value
         for value in (session.get("ts"), session.get("seen"))
@@ -235,25 +253,7 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
     ]
     if not stamps or now - max(stamps) > SESSION_TTL_SECONDS:
         return False
-
-    locator = session.get("locator")
-    pid = locator.get("claude_pid") if isinstance(locator, dict) else None
-    if not isinstance(pid, int):
-        # No pid recorded, which is the case for entries written before pids
-        # were. Falling back to the TTL alone kept the pet alive for six hours
-        # after everything had closed, so ask whether any Claude exists at all.
-        return any_claude_running()
-
-    # Claude Desktop's own entry is watched the same way, but its process is
-    # not called `claude`, so the locator names what to expect.
-    expected = CLAUDE_COMM
-    recorded = locator.get("comm") if isinstance(locator, dict) else None
-    if isinstance(recorded, str) and recorded:
-        expected = recorded
-
-    # The comm check guards against the pid being reused by something unrelated
-    # between the session dying and us looking at it.
-    return _comm_of(pid) == expected
+    return any_claude_running()
 
 
 def _prune(sessions: dict[str, Any], now: float) -> None:

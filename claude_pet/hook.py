@@ -18,6 +18,9 @@ from . import config, launch, locate, state
 #: submit as well means sessions that predate `install-hooks` still get one.
 LOCATE_ON = {"SessionStart", "UserPromptSubmit"}
 
+#: Events that may bring the overlay back if it is not running.
+AUTOSTART_ON = {"SessionStart", "UserPromptSubmit"}
+
 #: Sentinel: report the detail but leave the state as it was.
 KEEP = "__keep__"
 
@@ -152,8 +155,12 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         return 0
 
-    if event == "SessionStart" and config.load().get("autostart", True):
-        launch.spawn_detached(reason="SessionStart")
+    # `UserPromptSubmit` as well as `SessionStart`, because a session outlives
+    # the pet: quit it overnight, or lose it to a crash, and resuming the
+    # conversation you already had would never bring it back -- only starting a
+    # brand new one would. Costs a pidfile read when the pet is already up.
+    if event in AUTOSTART_ON and config.load().get("autostart", True):
+        launch.spawn_detached(reason=event)
     return 0
 
 

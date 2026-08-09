@@ -131,6 +131,33 @@ def lifecycle_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def autostart_checks() -> list[tuple[str, bool]]:
+    """Which events may bring a pet that is not running back.
+
+    A session outlives the pet: quit it overnight, or lose it to a crash, and
+    only starting an entirely new session used to revive it. Resuming the
+    conversation you already had left it dead.
+    """
+    from claude_pet import hook
+
+    results = [
+        ("a new session starts the pet", "SessionStart" in hook.AUTOSTART_ON),
+        ("so does submitting a prompt", "UserPromptSubmit" in hook.AUTOSTART_ON),
+    ]
+    # Not on the events that fire many times per turn: the pet is either
+    # already up or was deliberately quit, and neither wants a spawn attempt
+    # on every tool call.
+    results.append(
+        ("tool calls do not",
+         not ({"PreToolUse", "PostToolUse", "Notification"} & hook.AUTOSTART_ON))
+    )
+    results.append(
+        ("every autostart event is one we handle",
+         hook.AUTOSTART_ON <= set(hook.EVENT_STATES))
+    )
+    return results
+
+
 def main() -> int:
     # A scratch state directory: these must not read or disturb a running pet.
     workspace = tempfile.mkdtemp(prefix="claude-pet-test-")
@@ -147,6 +174,7 @@ def main() -> int:
     for label, results in (
         ("notifications", notification_checks()),
         ("lifecycle", lifecycle_checks()),
+        ("autostart", autostart_checks()),
     ):
         print(f"{label}:")
         for name, ok in results:

@@ -269,8 +269,19 @@ terminals or projects you have open:
 | all idle at their prompts | **idle**, and it starts wandering |
 | none | **idle** |
 
-Sessions are tracked by Claude's own session id and dropped on `SessionEnd`, or
-after six hours of silence if a session dies without one.
+Sessions are tracked by Claude's own session id and dropped on `SessionEnd` —
+or, when a session dies without one (a terminal closed with its window button,
+a crash, a reboot), as soon as the pet notices its process is gone.
+
+**Going quiet is not the same as going away.** A session left at its prompt
+overnight is idle, not dead, and stays tracked for as long as its Claude
+process is alive — days, if you leave it. Only entries too old to carry a
+process id fall back to a six-hour timeout.
+
+The pet starts on `SessionStart` and on `UserPromptSubmit`, so if it is not
+running — you quit it, or it exited while every session was closed — carrying
+on with a conversation you already had brings it back. It used to take an
+entirely new session.
 
 Bubble labels ship in English and Korean: `claude-pet set language ko`
 (`auto`, the default, follows your locale).

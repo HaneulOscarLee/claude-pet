@@ -121,6 +121,54 @@ def liveness_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def idle_session_checks() -> list[tuple[str, bool]]:
+    """A session left alone for hours is idle, not gone.
+
+    Age used to decide this before the process was consulted, so a session
+    sitting at its prompt overnight was dropped at six hours -- taking the pet
+    with it when it was the last one, and leaving it dead until an entirely new
+    session was started, since only `SessionStart` brings it back.
+    """
+    own_pid = os.getpid()
+    results = []
+
+    def quiet(hours: float) -> dict:
+        return {
+            "state": "idle", "ts": NOW - hours * 3600,
+            # `comm` is what this test process really is, standing in for a
+            # Claude process that is alive but has said nothing.
+            "locator": {"claude_pid": own_pid, "comm": _own_comm()},
+        }
+
+    for hours in (1, 7, 48):
+        results.append(
+            (f"quiet for {hours}h with a live process stays",
+             state.is_alive(quiet(hours), NOW))
+        )
+    results.append(
+        ("...and is still counted",
+         state.aggregate({"sessions": {"a": quiet(48)}})["sessions"] == 1)
+    )
+
+    # The process, not the clock, is what settles it.
+    gone = {"state": "idle", "ts": NOW, "locator": {"claude_pid": DEAD_PID, "comm": "claude"}}
+    results.append(("a dead process is gone however fresh", not state.is_alive(gone, NOW)))
+
+    # Entries that predate pid recording have nothing better than the clock.
+    ancient = {"state": "idle", "ts": NOW - 7 * 3600}
+    with claude_running(True):
+        results.append(("no pid, past the TTL -> gone", not state.is_alive(ancient, NOW)))
+        results.append(
+            ("no pid, within it -> live", state.is_alive({"state": "idle", "ts": NOW}, NOW))
+        )
+    return results
+
+
+def _own_comm() -> str:
+    with open(f"/proc/{os.getpid()}/comm", encoding="utf-8") as stream:
+        return stream.read().strip()
+
+
 def cpu_checks() -> list[tuple[str, bool]]:
     """`running` is dropped once the process stops doing anything.
 
@@ -208,7 +256,7 @@ def main() -> int:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
 
-    live_results = liveness_checks() + cpu_checks()
+    live_results = liveness_checks() + idle_session_checks() + cpu_checks()
     for name, ok in live_results:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
