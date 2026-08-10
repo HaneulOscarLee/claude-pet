@@ -865,12 +865,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         path = agents.settings_path(agent_id)
         if str(path).endswith(".toml"):
             present = path.exists() and agents.TOML_BEGIN in path.read_text(encoding="utf-8")
-            todo(
-                f"{agents.label(agent_id)} hooks",
-                present,
-                "claude-pet install-hooks",
-                "installed — approve once in Codex with /hooks" if present else "not installed",
-            )
+            if not present:
+                todo(f"{agents.label(agent_id)} hooks", False,
+                     "claude-pet install-hooks", "not installed")
+                continue
+
+            # Installed is only half the answer: Codex holds hooks untrusted
+            # until approved, and an unapproved hook is listed and inert. Ask
+            # it, rather than leave someone wondering why nothing happens.
+            status = agents.codex_hook_status()
+            if status is None:
+                optional(f"{agents.label(agent_id)} hooks",
+                         True, "installed — approve them in Codex with /hooks")
+            elif status[1] >= status[0] and status[0]:
+                optional(f"{agents.label(agent_id)} hooks",
+                         True, f"{status[1]}/{status[0]} approved — the pet follows Codex")
+            else:
+                todo(f"{agents.label(agent_id)} hooks", False, "run /hooks inside Codex",
+                     f"{status[1]}/{status[0]} approved — until then they never fire")
             continue
         wired = sum(
             1

@@ -25,6 +25,7 @@ inside every turn of every agent.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +210,80 @@ def toml_hook_block(agent_id: str, command: str) -> str:
         lines.append(f'command = "{command}"')
     lines.append(TOML_END)
     return "\n".join(lines) + "\n"
+
+
+def codex_hook_status(timeout: float = 8.0) -> tuple[int, int] | None:
+    """How many hooks Codex has of ours, and how many it will actually run.
+
+    Codex holds any hook that can run a command untrusted until the user
+    approves it, and an unapproved hook is silently inert -- installed,
+    listed, and never fired. Without asking, `doctor` could only ever say
+    "installed", which is the half of the truth that does not explain why
+    nothing happens.
+
+    Asked over its app-server, which answers without starting a session or
+    spending anything. Returns None when it cannot be asked at all.
+    """
+    import json
+    import subprocess
+
+    try:
+        process = subprocess.Popen(  # noqa: S603 - fixed argv
+            ["codex", "app-server"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    def send(payload: dict[str, Any]) -> None:
+        process.stdin.write(json.dumps(payload) + "\n")
+        process.stdin.flush()
+
+    def reply(wanted: int) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                return None
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if message.get("id") == wanted:
+                return message
+        return None
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"clientInfo": {"name": "claude-pet", "version": "0"}}})
+        if reply(1) is None:
+            return None
+        send({"jsonrpc": "2.0", "id": 2, "method": "hooks/list", "params": {}})
+        answer = reply(2)
+    except (OSError, ValueError):
+        return None
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+    if not answer:
+        return None
+    groups = (answer.get("result") or {}).get("data") or [{}]
+    hooks = [
+        hook
+        for group in groups
+        for hook in (group.get("hooks") or [])
+        if "claude-pet" in str(hook.get("command") or "")
+    ]
+    trusted = [hook for hook in hooks if hook.get("trustStatus") == "trusted"]
+    return len(hooks), len(trusted)
 
 
 def _comm_of(pid: int | str) -> str:

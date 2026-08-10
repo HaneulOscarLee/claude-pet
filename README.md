@@ -193,6 +193,10 @@ claude-pet install-hooks              # wires up every agent it finds
 claude-pet install-hooks --agent gemini
 ```
 
+The pet starts with **whichever agent you start**, not only with Claude: the
+same `SessionStart` and first-prompt hooks launch it, translated per agent, so
+opening a Gemini or Codex session brings it up exactly as a Claude one does.
+
 ```console
 $ claude-pet install-hooks
   Claude Code  /home/you/.claude/settings.json  added 8 event(s)

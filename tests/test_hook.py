@@ -155,6 +155,31 @@ def autostart_checks() -> list[tuple[str, bool]]:
         ("every autostart event is one we handle",
          hook.AUTOSTART_ON <= set(hook.EVENT_STATES))
     )
+
+    # The pet starts with whichever agent you start, not only with Claude.
+    # Autostart is decided after translation, so an agent that renames its
+    # events still lands on the same two.
+    from claude_pet import agents
+
+    for agent_id in agents.known():
+        for canonical in ("SessionStart", "UserPromptSubmit"):
+            theirs = agents.to_agent_event(agent_id, canonical)
+            if theirs is None:
+                continue  # that agent has no such event; nothing to start on
+            results.append(
+                (f"{agent_id} {theirs} starts the pet",
+                 agents.to_canonical(theirs) in hook.AUTOSTART_ON)
+            )
+
+    # Every agent must have at least one event that can bring the pet back,
+    # or it would follow that agent only while something else kept it alive.
+    for agent_id in agents.known():
+        reachable = any(
+            (theirs := agents.to_agent_event(agent_id, canonical))
+            and agents.to_canonical(theirs) in hook.AUTOSTART_ON
+            for canonical in agents.CANONICAL_EVENTS
+        )
+        results.append((f"{agent_id} can start the pet at all", reachable))
     return results
 
 
