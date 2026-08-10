@@ -534,13 +534,47 @@ def _hook_events_installed() -> int:
     )
 
 
-def _uses_settings_file(agent_id: str) -> bool:
-    """Whether this agent takes hooks in a settings file we can write.
+def _install_toml_hooks(path: Path, agent_id: str) -> int:
+    """Append our hooks to a TOML settings file, between markers.
 
-    Codex does not: its hooks arrive through a plugin, installed from a
-    marketplace, which is a different shape of job and not done here yet.
+    Not re-serialised like the JSON ones: comments, ordering and formatting in
+    that file are the user's, and round-tripping TOML would quietly rewrite all
+    three. A marked block can be found and removed exactly, and leaves
+    everything around it alone.
     """
-    return str(agents.settings_path(agent_id)).endswith(".json")
+    body = path.read_text(encoding="utf-8") if path.exists() else ""
+    if agents.TOML_BEGIN in body:
+        return 0
+
+    command = f"{launcher_path()} hook"
+    block = agents.toml_hook_block(agent_id, str(command))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    separator = "" if not body or body.endswith("\n\n") else ("\n" if body.endswith("\n") else "\n\n")
+    path.write_text(body + separator + block, encoding="utf-8")
+    # Counted from the agent's own event set, which is what the block was
+    # built from -- HOOK_EVENTS is Claude's list and would undercount.
+    return sum(
+        1 for e in agents.CANONICAL_EVENTS if agents.to_agent_event(agent_id, e)
+    )
+
+
+def _uninstall_toml_hooks(path: Path) -> int:
+    if not path.exists():
+        return 0
+    body = path.read_text(encoding="utf-8")
+    start = body.find(agents.TOML_BEGIN)
+    end = body.find(agents.TOML_END)
+    if start < 0 or end < 0:
+        return 0
+    trimmed = body[:start].rstrip("\n") + "\n" + body[end + len(agents.TOML_END):].lstrip("\n")
+    path.write_text(trimmed.rstrip("\n") + "\n", encoding="utf-8")
+    return 1
+
+
+def _uses_settings_file(agent_id: str) -> bool:
+    """Whether this agent takes hooks in a settings file we can write."""
+    name = str(agents.settings_path(agent_id))
+    return name.endswith(".json") or name.endswith(".toml")
 
 
 def _entry_is_ours(entry: Any) -> bool:
@@ -612,6 +646,14 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
             print(f"  {agents.label(agent_id):<12} not wired up yet — see the README")
             continue
         path = agents.settings_path(agent_id)
+        if str(path).endswith('.toml'):
+            added = _install_toml_hooks(path, agent_id)
+            if added:
+                print(f'  {agents.label(agent_id):<12} {path}  added {added} event(s)')
+                print(f'  {"":<12} approve them once in Codex with /hooks')
+            else:
+                print(f'  {agents.label(agent_id):<12} {path}  already installed')
+            continue
         added = _install_hooks_into(path, agent_id)
         if added < 0:
             status = 1
@@ -629,7 +671,12 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
         for agent_id in agents.detect():
             if not _uses_settings_file(agent_id):
                 continue
-            status |= _uninstall_hooks_from(agents.settings_path(agent_id))
+            path = agents.settings_path(agent_id)
+            if str(path).endswith('.toml'):
+                if _uninstall_toml_hooks(path):
+                    print(f'{path}: removed the claude-pet hooks')
+                continue
+            status |= _uninstall_hooks_from(path)
         return status
     return _uninstall_hooks_from(_settings_file(True))
 
@@ -808,6 +855,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  --    {agents.label(agent_id)}: installed, not wired up yet")
             continue
         path = agents.settings_path(agent_id)
+        if str(path).endswith(".toml"):
+            present = path.exists() and agents.TOML_BEGIN in path.read_text(encoding="utf-8")
+            todo(
+                f"{agents.label(agent_id)} hooks",
+                present,
+                "claude-pet install-hooks",
+                "installed — approve once in Codex with /hooks" if present else "not installed",
+            )
+            continue
         wired = sum(
             1
             for entries in (_read_settings(path).get("hooks") or {}).values()

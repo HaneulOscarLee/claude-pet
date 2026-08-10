@@ -56,9 +56,18 @@ def naming_checks() -> list[tuple[str, bool]]:
         ("gemini has no SubagentStop",
          agents.to_agent_event("gemini", "SubagentStop") is None)
     )
+    # Codex does have SubagentStop -- confirmed by asking its `hooks/list`
+    # what it registered. What it has no notion of is a notification or a
+    # session ending, so those must not be offered.
     results.append(
-        ("codex has no SubagentStop either",
-         agents.to_agent_event("codex", "SubagentStop") is None)
+        ("codex does have SubagentStop",
+         agents.to_agent_event("codex", "SubagentStop") == "SubagentStop")
+    )
+    results.append(
+        ("codex has no Notification", agents.to_agent_event("codex", "Notification") is None)
+    )
+    results.append(
+        ("codex has no SessionEnd", agents.to_agent_event("codex", "SessionEnd") is None)
     )
     results.append(
         ("claude has all of them",
@@ -150,6 +159,46 @@ def registry_checks() -> list[tuple[str, bool]]:
     return results
 
 
+#: What Codex actually accepted. Offered all ten events and asked back through
+#: its `hooks/list`; these eight came back registered, `Notification` was
+#: dropped without complaint and `SessionEnd` does not exist there.
+CODEX_EVENTS = {
+    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "Stop", "SubagentStop", "PreCompact", "PostCompact",
+}
+
+
+def toml_checks() -> list[tuple[str, bool]]:
+    """The block written into Codex's config, which is TOML and not rewritable.
+
+    Its settings file holds the user's own comments, ordering and formatting,
+    so ours goes in between markers and comes out again exactly -- round-
+    tripping the whole file through a TOML writer would quietly reformat it.
+    """
+    block = agents.toml_hook_block("codex", "/usr/bin/claude-pet hook")
+    results = [
+        ("the block is marked at both ends",
+         block.startswith(agents.TOML_BEGIN) and agents.TOML_END in block),
+        ("it declares a table per event",
+         block.count("[[hooks.") == 2 * len(CODEX_EVENTS)),  # entry + its hooks array
+        ("the command is in there", "/usr/bin/claude-pet hook" in block),
+        ("nothing codex rejects is declared",
+         all(f"[[hooks.{e}]]" not in block for e in ("Notification", "SessionEnd"))),
+    ]
+    for event in sorted(CODEX_EVENTS):
+        results.append((f"declares {event}", f"[[hooks.{event}]]" in block))
+
+    # Removal has to be exact: what is between the markers goes, everything
+    # else stays byte for byte.
+    body = 'model = "gpt-5.5"\n\n# a comment of the user\'s\n[projects."/x"]\ntrust_level = "trusted"\n'
+    combined = body + "\n" + block
+    start, end = combined.find(agents.TOML_BEGIN), combined.find(agents.TOML_END)
+    trimmed = combined[:start].rstrip("\n") + "\n" + combined[end + len(agents.TOML_END):].lstrip("\n")
+    results.append(("removing it restores the original", trimmed.rstrip("\n") == body.rstrip("\n")))
+    results.append(("the user's comment survives", "# a comment of the user's" in trimmed))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -157,6 +206,7 @@ def main() -> int:
         ("names", naming_checks()),
         ("processes", process_checks()),
         ("registry", registry_checks()),
+        ("codex toml", toml_checks()),
     ):
         print(f"{label}:")
         for name, ok in results:

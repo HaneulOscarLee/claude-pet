@@ -174,11 +174,10 @@ stays in the foreground, which is what you want for debugging.
 
 ## More than one agent
 
-The pet follows **Claude Code**, **Gemini CLI** and — soon — **Codex**, all at
-once, in one pet. They turn out to share a hook vocabulary: Codex's binary
-carries Claude's event names verbatim, and Gemini ships a `hooks migrate` whose
-entire job is rewriting a Claude configuration into its own. So one bridge
-serves all of them.
+The pet follows **Claude Code**, **Codex** and **Gemini CLI** at once, in one
+pet. They turn out to share a hook vocabulary: Codex's binary carries Claude's
+event names verbatim, and Gemini ships a `hooks migrate` whose entire job is
+rewriting a Claude configuration into its own. So one bridge serves all three.
 
 ```bash
 claude-pet install-hooks              # wires up every agent it finds
@@ -188,9 +187,18 @@ claude-pet install-hooks --agent gemini
 ```console
 $ claude-pet install-hooks
   Claude Code  /home/you/.claude/settings.json  added 8 event(s)
-  Codex        not wired up yet — see below
+  Codex        /home/you/.codex/config.toml     added 8 event(s)
+               approve them once in Codex with /hooks
   Gemini CLI   /home/you/.gemini/settings.json  added 7 event(s)
 ```
+
+**Codex asks you to approve hooks once.** Anything that can run a command on
+its behalf starts out untrusted, whoever wrote it, and it is Codex's business
+to ask rather than claude-pet's to answer — so the hooks are installed and
+approving them is left to you, in Codex's own `/hooks` view. Its settings are
+TOML, so they go in between markers rather than being re-serialised: your
+comments, key order and formatting are yours, and `uninstall-hooks` takes the
+block back out byte for byte.
 
 What differs between them is narrow, and handled:
 
@@ -199,7 +207,7 @@ What differs between them is narrow, and handled:
 | turn starts | `UserPromptSubmit` | `BeforeAgent` | `UserPromptSubmit` |
 | turn ends | `Stop` | `AfterAgent` | `Stop` |
 | tool calls | `Pre`/`PostToolUse` | `Before`/`AfterTool` | `Pre`/`PostToolUse` |
-| settings | `~/.claude/settings.json` | `~/.gemini/settings.json` | plugin |
+| settings | `~/.claude/settings.json` | `~/.gemini/settings.json` | `~/.codex/config.toml` |
 | its process | `claude` | `node` | `codex` |
 
 That last row matters more than it looks. A session stays tracked by checking
@@ -214,10 +222,12 @@ Sessions from other agents are labelled in `claude-pet status`:
   7c31a0b4        running        [gemini] ReadFile   pid=3862004  PreToolUse 2s ago
 ```
 
-**Codex is not wired up yet.** Its hooks arrive through a plugin installed from
-a marketplace rather than a settings file — a different shape of job. Its
-marketplace does accept a local path, so shipping one is the plan.
-`claude-pet doctor` says where each agent stands.
+Not every agent has every event. Codex has no `Notification` and no
+`SessionEnd` — so a Codex session ending is noticed by its process going
+away, which is how a session that dies without saying so is handled anyway.
+Gemini has no `SubagentStop`. Nothing is offered to an agent that would
+reject it: the list each one supports was checked against what it actually
+registered, not assumed. `claude-pet doctor` says where each agent stands.
 
 ## What the pet shows
 

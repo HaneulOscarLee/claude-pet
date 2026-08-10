@@ -70,8 +70,11 @@ AGENTS: dict[str, dict[str, Any]] = {
         "comm": "codex",
         "cmdline": "",
         "settings": "~/.codex/config.toml",
-        # Claude's names verbatim, for the six its binary carries. The rest are
-        # left out rather than guessed at.
+        # Claude's names verbatim. This list is what Codex actually accepted:
+        # offered all ten and asked it back through `hooks/list`, these eight
+        # came back registered. `Notification` was dropped without complaint
+        # and there is no `SessionEnd` at all -- which is why a Codex session
+        # ending is noticed by its process going away instead.
         "events": {
             name: name
             for name in (
@@ -79,8 +82,10 @@ AGENTS: dict[str, dict[str, Any]] = {
                 "UserPromptSubmit",
                 "PreToolUse",
                 "PostToolUse",
-                "Notification",
                 "Stop",
+                "SubagentStop",
+                "PreCompact",
+                "PostCompact",
             )
         },
     },
@@ -171,6 +176,29 @@ def to_canonical(name: str) -> str:
 
 
 # ---------------------------------------------------------------- processes
+
+
+#: Wraps the block written into Codex's TOML, so it can be found and removed
+#: again. Its settings file is not JSON, so it cannot simply be re-serialised
+#: the way the others are -- comments and key order are the user's, and
+#: rewriting the file would lose both.
+TOML_BEGIN = "# >>> claude-pet hooks >>>"
+TOML_END = "# <<< claude-pet hooks <<<"
+
+
+def toml_hook_block(agent_id: str, command: str) -> str:
+    """The `[[hooks.Event]]` tables to append to a TOML settings file."""
+    lines = [TOML_BEGIN]
+    for canonical in CANONICAL_EVENTS:
+        name = to_agent_event(agent_id, canonical)
+        if name is None:
+            continue
+        lines.append(f"[[hooks.{name}]]")
+        lines.append(f"[[hooks.{name}.hooks]]")
+        lines.append('type = "command"')
+        lines.append(f'command = "{command}"')
+    lines.append(TOML_END)
+    return "\n".join(lines) + "\n"
 
 
 def _comm_of(pid: int | str) -> str:
