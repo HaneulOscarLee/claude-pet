@@ -47,6 +47,12 @@ The last two are optional: `wmctrl` lets clicking the pet raise a terminal that
 is not running tmux, and `libnotify-bin` enables desktop notifications, which
 are off by default anyway.
 
+> **`No module named 'gi'`, with `python3-gi` installed?** Your `python3` is a
+> virtualenv, pyenv, conda or asdf one. PyGObject is installed by the system
+> package manager into the *system* Python and nowhere else, so those
+> interpreters cannot see it. claude-pet looks past them for one that can, and
+> `CLAUDE_PET_PYTHON=/usr/bin/python3` settles it outright.
+
 > **Why XWayland?** `_NET_WM_STATE_ABOVE` is the only always-on-top mechanism
 > mutter honours for an ordinary client, and `gtk-layer-shell` is wlroots-only.
 > So the launcher exports `GDK_BACKEND=x11` and the window goes through

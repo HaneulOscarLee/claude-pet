@@ -13,4 +13,42 @@ export PYTHONSAFEPATH=1
 # _NET_WM_STATE_ABOVE under mutter, which is what keeps the pet on top.
 export GDK_BACKEND="${CLAUDE_PET_GDK_BACKEND:-x11}"
 
+# PyGObject is installed by the system package manager, into the *system*
+# Python's dist-packages and nowhere else. So `python3` being first on PATH is
+# not enough: for anyone whose shell resolves it to pyenv, conda, asdf or an
+# active virtualenv, apt has installed a PyGObject that interpreter cannot see,
+# and the pet dies on `import gi` having looked correctly installed all along.
+#
+# Only commands that need the GUI libraries pay for the probe. `hook` runs
+# inside every turn of every agent and has no use for them.
+#
+# `doctor` and `setup` are in the list because they import Pillow and GTK to
+# check them, and a diagnostic that dies of the very fault it exists to report
+# is worse than no diagnostic at all.
+case "${1:-}" in
+    run|start|restart|demo|snapshot|preview|doctor|setup)
+        for candidate in "${CLAUDE_PET_PYTHON:-}" python3 /usr/bin/python3; do
+            [ -n "$candidate" ] || continue
+            command -v "$candidate" >/dev/null 2>&1 || continue
+            if "$candidate" -c 'import gi' >/dev/null 2>&1; then
+                exec "$candidate" -m claude_pet "$@"
+            fi
+        done
+        # Nothing on this machine can import it, which is a missing package
+        # rather than a broken install -- so say which one, instead of letting
+        # a bare ModuleNotFoundError stand in for the explanation.
+        echo "claude-pet: PyGObject (the 'gi' module) is not available to any python3 here." >&2
+        echo "  Debian/Ubuntu: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0" >&2
+        echo "  Fedora:        sudo dnf install python3-gobject gtk3" >&2
+        echo "  Arch:          sudo pacman -S python-gobject gtk3" >&2
+        echo "  openSUSE:      sudo zypper install python3-gobject gtk3" >&2
+        echo >&2
+        echo "  Already installed? Your python3 is probably a virtualenv, pyenv or" >&2
+        echo "  conda one, which cannot see packages installed system-wide. Point" >&2
+        echo "  claude-pet at the system interpreter:" >&2
+        echo "    CLAUDE_PET_PYTHON=/usr/bin/python3 claude-pet $1" >&2
+        exit 1
+        ;;
+esac
+
 exec python3 -m claude_pet "$@"

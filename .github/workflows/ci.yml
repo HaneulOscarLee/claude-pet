@@ -53,6 +53,10 @@ jobs:
       - name: Petting tests
         run: python3 tests/test_petting.py
 
+      # Which interpreter the launcher picks, with stand-ins on PATH.
+      - name: Launcher tests
+        run: python3 tests/test_launcher.py
+
       - name: Bundled pack parses
         run: |
           python3 - <<'PY'
