@@ -115,6 +115,16 @@ AGENTS: dict[str, dict[str, Any]] = {
 #: What the pet is, so it never mistakes itself for an agent.
 DEFAULT_AGENT = "claude"
 
+# OpenCode was looked at and left out, for a reason worth writing down rather
+# than rediscovering. Its extension point is a JavaScript plugin exporting
+# callbacks -- `tool.execute.before`, `tool.execute.after`, `permission.ask` --
+# not a command a hook can run, so the bridge would have to become a plugin
+# too. Worse, its event bus carries `message.updated` and `permission.asked`
+# but nothing that plainly marks a turn beginning or ending, so `running` and
+# `done` would have to be inferred from message traffic. That inference is
+# guesswork, and guesswork here is what produces a pet sitting on the wrong
+# state. Adding it means finding a real turn boundary first.
+
 
 def known() -> list[str]:
     return list(AGENTS)

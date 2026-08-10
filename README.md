@@ -229,6 +229,13 @@ Gemini has no `SubagentStop`. Nothing is offered to an agent that would
 reject it: the list each one supports was checked against what it actually
 registered, not assumed. `claude-pet doctor` says where each agent stands.
 
+**OpenCode is not supported**, having been looked at and left out. Its
+extension point is a JavaScript plugin exporting callbacks rather than a
+command a hook can run, and its event bus carries message traffic without
+anything that plainly marks a turn starting or ending — so `working` and
+`done` would have to be inferred, and a pet built on inference is a pet
+that sits on the wrong state. It needs a real turn boundary first.
+
 ## What the pet shows
 
 | Claude Code hook | State | Bubble reads |
