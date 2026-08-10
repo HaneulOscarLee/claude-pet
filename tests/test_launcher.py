@@ -67,10 +67,14 @@ def checks(workspace: Path) -> list[tuple[str, bool]]:
 
     # The reported failure: a gi-less python3 first on PATH. The launcher must
     # look past it rather than exec it and die on `import gi`.
+    #
+    # Asserted on the absence of that error and nothing else. Whether the pet
+    # then starts depends on there being a display, which there is not on CI,
+    # and that is a different question from the one this is guarding.
     done = run(["run"], [bad, good, *real])
     results.append(
         ("a gi-less python3 first on PATH is passed over",
-         done.returncode == 0 and "No module named" not in done.stderr)
+         "No module named 'gi'" not in done.stderr)
     )
 
     # An explicit choice wins over everything.
