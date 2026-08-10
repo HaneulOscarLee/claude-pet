@@ -230,10 +230,18 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
     pid = locator.get("claude_pid") if isinstance(locator, dict) else None
 
     if isinstance(pid, int):
-        # Claude Desktop's own entry is watched the same way, but its process
-        # is not called `claude`, so the locator names what to expect. The comm
-        # check also guards against the pid being reused by something unrelated
-        # between the session dying and us looking at it.
+        # Which agent it is decides how to recognise it: `claude` is a process
+        # called `claude`, `gemini` is a process called `node` and has to be
+        # told apart by its command line. Claude Desktop's own entry names its
+        # `comm` outright, having no agent behind it.
+        agent = locator.get("agent")
+        if isinstance(agent, str) and agent:
+            from . import agents
+
+            # Guards against the pid being reused by something unrelated
+            # between the session dying and us looking at it.
+            return agents.is_process(agent, pid)
+
         recorded = locator.get("comm")
         expected = recorded if isinstance(recorded, str) and recorded else CLAUDE_COMM
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from . import desktop
+from . import agents, desktop
 
 #: Processes between the hook and the terminal that are never the terminal.
 _TRANSPARENT = {
@@ -65,18 +65,30 @@ def terminal_candidates() -> list[int]:
     return [pid for pid in ancestor_pids() if _comm(pid) not in _TRANSPARENT]
 
 
-#: `comm` of the Claude Code process. Recorded separately as the session's
-#: liveness signal: the rest of the ancestor chain is useless for that, since
-#: it ends at systemd, which never exits.
+#: `comm` of the Claude Code process. Kept for callers that predate several
+#: agents being supported; `agent_process()` is the general answer.
 CLAUDE_COMM = "claude"
+
+
+def agent_process() -> tuple[str, int] | None:
+    """Nearest ancestor that is a coding agent, and which one it is.
+
+    Recorded separately from the rest of the chain because it is the session's
+    liveness signal, and the chain is useless for that -- it ends at systemd,
+    which never exits. Which agent it is has to be settled here too: later on
+    there is only a pid, and `gemini` and any other Node program look alike.
+    """
+    for pid in ancestor_pids():
+        found = agents.identify(pid)
+        if found is not None:
+            return found, pid
+    return None
 
 
 def claude_pid() -> int | None:
     """Nearest ancestor that is the Claude Code process itself."""
-    for pid in ancestor_pids():
-        if _comm(pid) == CLAUDE_COMM:
-            return pid
-    return None
+    found = agent_process()
+    return found[1] if found is not None and found[0] == "claude" else None
 
 
 def locator() -> dict[str, Any]:
@@ -84,9 +96,11 @@ def locator() -> dict[str, Any]:
     chain = ancestor_pids()[:_MAX_DEPTH]
     found: dict[str, Any] = {"pids": chain}
 
-    owner = claude_pid()
+    owner = agent_process()
     if owner is not None:
-        found["claude_pid"] = owner
+        found["agent"], found["claude_pid"] = owner
+        # `claude_pid` keeps its name: entries written by earlier versions use
+        # it, and renaming it would strand every session already on disk.
 
     # Claude Desktop runs the same Claude Code binary, so its sessions arrive
     # here indistinguishably -- except in the ancestry. Recording which side a

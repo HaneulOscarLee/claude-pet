@@ -11,7 +11,7 @@ import json
 import sys
 from typing import Any
 
-from . import config, launch, locate, state
+from . import agents, config, launch, locate, state
 
 #: Events on which the session's location is (re)recorded. Cheap -- a handful
 #: of /proc reads -- but pointless on every tool call, and doing it on prompt
@@ -117,7 +117,10 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(payload, dict):
         payload = {}
 
-    event = forced_event or str(payload.get("hook_event_name") or "")
+    # One bridge serves every agent, so the event arrives in the caller's own
+    # vocabulary -- Gemini says BeforeAgent where Claude says UserPromptSubmit
+    # -- and is translated on the way in.
+    event = agents.to_canonical(forced_event or str(payload.get("hook_event_name") or ""))
     if event not in EVENT_STATES:
         return 0
 

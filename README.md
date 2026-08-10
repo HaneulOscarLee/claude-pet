@@ -172,6 +172,53 @@ If you do start it yourself, `claude-pet run --detach` backgrounds it so
 closing the terminal does not take the pet with it. Plain `claude-pet run`
 stays in the foreground, which is what you want for debugging.
 
+## More than one agent
+
+The pet follows **Claude Code**, **Gemini CLI** and — soon — **Codex**, all at
+once, in one pet. They turn out to share a hook vocabulary: Codex's binary
+carries Claude's event names verbatim, and Gemini ships a `hooks migrate` whose
+entire job is rewriting a Claude configuration into its own. So one bridge
+serves all of them.
+
+```bash
+claude-pet install-hooks              # wires up every agent it finds
+claude-pet install-hooks --agent gemini
+```
+
+```console
+$ claude-pet install-hooks
+  Claude Code  /home/you/.claude/settings.json  added 8 event(s)
+  Codex        not wired up yet — see below
+  Gemini CLI   /home/you/.gemini/settings.json  added 7 event(s)
+```
+
+What differs between them is narrow, and handled:
+
+| | Claude Code | Gemini CLI | Codex |
+|---|---|---|---|
+| turn starts | `UserPromptSubmit` | `BeforeAgent` | `UserPromptSubmit` |
+| turn ends | `Stop` | `AfterAgent` | `Stop` |
+| tool calls | `Pre`/`PostToolUse` | `Before`/`AfterTool` | `Pre`/`PostToolUse` |
+| settings | `~/.claude/settings.json` | `~/.gemini/settings.json` | plugin |
+| its process | `claude` | `node` | `codex` |
+
+That last row matters more than it looks. A session stays tracked by checking
+its process is still alive, and Gemini's process is called `node` — so its
+command line is checked too, or every Node program on the machine would pass
+for a Gemini session and keep dead entries alive forever.
+
+Sessions from other agents are labelled in `claude-pet status`:
+
+```console
+  ed0f2f9c        running        Bash                pid=3050615  PreToolUse 0s ago
+  7c31a0b4        running        [gemini] ReadFile   pid=3862004  PreToolUse 2s ago
+```
+
+**Codex is not wired up yet.** Its hooks arrive through a plugin installed from
+a marketplace rather than a settings file — a different shape of job. Its
+marketplace does accept a local path, so shipping one is the plan.
+`claude-pet doctor` says where each agent stands.
+
 ## What the pet shows
 
 | Claude Code hook | State | Bubble reads |

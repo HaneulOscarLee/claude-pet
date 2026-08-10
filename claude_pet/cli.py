@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import config, state
+from . import agents, config, state
 from .errors import PetError
 
 # `sprites` pulls in Pillow and `registry` opens sockets, so both are imported
@@ -457,6 +457,10 @@ def cmd_status(_args: argparse.Namespace) -> int:
         detail = session.get("detail") or ""
         if origin == desktop.ORIGIN_DESKTOP and not is_app:
             detail = f"{detail} (in Claude Desktop)".strip()
+        # Which agent it is, once there is more than one it could be.
+        agent = locator.get("agent")
+        if isinstance(agent, str) and agent and agent != agents.DEFAULT_AGENT:
+            detail = f"[{agent}] {detail}".strip()
 
         # What it reported, and what it still counts for. Printing only the
         # first makes an expired entry look like it is driving the pet.
@@ -530,6 +534,15 @@ def _hook_events_installed() -> int:
     )
 
 
+def _uses_settings_file(agent_id: str) -> bool:
+    """Whether this agent takes hooks in a settings file we can write.
+
+    Codex does not: its hooks arrive through a plugin, installed from a
+    marketplace, which is a different shape of job and not done here yet.
+    """
+    return str(agents.settings_path(agent_id)).endswith(".json")
+
+
 def _entry_is_ours(entry: Any) -> bool:
     """True when a hooks[] entry was written by `install-hooks`."""
     if not isinstance(entry, dict):
@@ -541,20 +554,28 @@ def _entry_is_ours(entry: Any) -> bool:
     )
 
 
-def cmd_install_hooks(args: argparse.Namespace) -> int:
-    path = _settings_file(args.project)
+def _install_hooks_into(path: Path, agent_id: str) -> int:
+    """Wire the bridge into one agent's settings file. Returns events added.
+
+    The file shape is the same for every agent that uses one -- Gemini's hooks
+    section was written to accept a Claude configuration verbatim -- so only
+    the event names differ, and those are translated on the way out.
+    """
     settings = _read_settings(path)
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         print(f"claude-pet: hooks in {path} is not an object", file=sys.stderr)
-        return 1
+        return -1
 
     command = f"{launcher_path()} hook"
     added = 0
     for event in HOOK_EVENTS:
-        entries = hooks.setdefault(event, [])
+        name = agents.to_agent_event(agent_id, event)
+        if name is None:
+            continue  # this agent has no such event
+        entries = hooks.setdefault(name, [])
         if not isinstance(entries, list):
-            print(f"claude-pet: hooks.{event} is not an array, skipping", file=sys.stderr)
+            print(f"claude-pet: hooks.{name} is not an array, skipping", file=sys.stderr)
             continue
         if any(_entry_is_ours(entry) for entry in entries):
             continue
@@ -563,14 +584,57 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"{path}: added hooks for {added} event(s); existing hooks untouched")
-    if added:
-        print("Start a new Claude Code session and the pet will follow along.")
-    return 0
+    return added
+
+
+def cmd_install_hooks(args: argparse.Namespace) -> int:
+    # A project-scoped install stays Claude-only: the others keep their
+    # settings in one place per user, with no per-repository equivalent.
+    if args.project:
+        added = _install_hooks_into(_settings_file(True), "claude")
+        if added < 0:
+            return 1
+        print(f"{_settings_file(True)}: added hooks for {added} event(s); existing ones untouched")
+        return 0
+
+    wanted = [args.agent] if getattr(args, "agent", None) else agents.detect()
+    if not wanted:
+        print("claude-pet: no supported agent found on this machine", file=sys.stderr)
+        return 1
+
+    status = 0
+    for agent_id in wanted:
+        if agent_id not in agents.known():
+            print(f"claude-pet: unknown agent {agent_id!r}", file=sys.stderr)
+            status = 1
+            continue
+        if not _uses_settings_file(agent_id):
+            print(f"  {agents.label(agent_id):<12} not wired up yet — see the README")
+            continue
+        path = agents.settings_path(agent_id)
+        added = _install_hooks_into(path, agent_id)
+        if added < 0:
+            status = 1
+            continue
+        note = f"added {added} event(s)" if added else "already installed"
+        print(f"  {agents.label(agent_id):<12} {path}  {note}")
+    return status
 
 
 def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
-    path = _settings_file(args.project)
+    if not args.project:
+        # Every agent it was installed into, or it would be removed from
+        # one and left behind in the others.
+        status = 0
+        for agent_id in agents.detect():
+            if not _uses_settings_file(agent_id):
+                continue
+            status |= _uninstall_hooks_from(agents.settings_path(agent_id))
+        return status
+    return _uninstall_hooks_from(_settings_file(True))
+
+
+def _uninstall_hooks_from(path: Path) -> int:
     settings = _read_settings(path)
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
@@ -706,19 +770,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             problems += 1
 
     print("\nintegration")
-    settings_path = config.claude_home() / "settings.json"
-    settings = _read_settings(settings_path)
-    installed_events = [
-        event
-        for event, entries in (settings.get("hooks") or {}).items()
-        if isinstance(entries, list) and any(_entry_is_ours(entry) for entry in entries)
-    ]
-    todo(
-        "hooks installed",
-        len(installed_events) >= len(HOOK_EVENTS),
-        "claude-pet install-hooks",
-        f"{len(installed_events)}/{len(HOOK_EVENTS)} events",
-    )
+    # Hooks are reported per agent further down, now that there is more than
+    # one to report on.
     on_path = launcher_on_path()
     todo(
         "claude-pet on PATH",
@@ -747,6 +800,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         hint = "install wmctrl (or xdotool) to raise the terminal, or run Claude in tmux"
     optional("click-to-jump", bool(usable), hint)
+
+    for agent_id in agents.known():
+        if not agents.installed(agent_id):
+            continue
+        if not _uses_settings_file(agent_id):
+            print(f"  --    {agents.label(agent_id)}: installed, not wired up yet")
+            continue
+        path = agents.settings_path(agent_id)
+        wired = sum(
+            1
+            for entries in (_read_settings(path).get("hooks") or {}).values()
+            if isinstance(entries, list) and any(_entry_is_ours(entry) for entry in entries)
+        )
+        expected = sum(1 for e in HOOK_EVENTS if agents.to_agent_event(agent_id, e))
+        todo(
+            f"{agents.label(agent_id)} hooks",
+            wired >= expected,
+            "claude-pet install-hooks",
+            f"{wired}/{expected} events",
+        )
 
     from . import tray
 
@@ -1193,8 +1266,13 @@ def build_parser() -> argparse.ArgumentParser:
     setter.add_argument("value")
     setter.set_defaults(func=cmd_set)
 
-    install = subparsers.add_parser("install-hooks", help="add hooks to Claude Code settings.json")
+    install = subparsers.add_parser(
+        "install-hooks", help="wire the pet into every coding agent you have"
+    )
     install.add_argument("--project", action="store_true", help="use ./.claude/settings.json instead of the global one")
+    install.add_argument(
+        "--agent", choices=agents.known(), help="just this one, instead of all of them"
+    )
     install.set_defaults(func=cmd_install_hooks)
 
     uninstall = subparsers.add_parser("uninstall-hooks", help="remove the hooks again")

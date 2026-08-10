@@ -41,6 +41,10 @@ jobs:
       - name: Hook event tests
         run: python3 tests/test_hook.py
 
+      # Event-name translation and process recognition across agents.
+      - name: Agent registry tests
+        run: python3 tests/test_agents.py
+
       # Placement arithmetic, against a stand-in for the screen layout.
       - name: Geometry tests
         run: python3 tests/test_geometry.py
