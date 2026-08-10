@@ -24,6 +24,7 @@ INSTALL_DIR="$STAGE/usr/lib/$PACKAGE"
 mkdir -p "$INSTALL_DIR" \
          "$STAGE/usr/bin" \
          "$STAGE/usr/share/applications" \
+         "$STAGE/etc/xdg/autostart" \
          "$STAGE/usr/share/bash-completion/completions" \
          "$STAGE/usr/share/doc/$PACKAGE" \
          "$STAGE/DEBIAN"
@@ -35,6 +36,10 @@ chmod 755 "$INSTALL_DIR/claude-pet"
 
 ln -s "/usr/lib/$PACKAGE/claude-pet" "$STAGE/usr/bin/claude-pet"
 cp "$HERE/claude-pet.desktop" "$STAGE/usr/share/applications/"
+# The package cannot write a user's hooks -- postinst runs as root and the
+# hooks belong to whoever logs in. Without this the .deb installs cleanly and
+# then nothing happens on the next Claude session, with nothing to say why.
+cp "$HERE/claude-pet-autostart.desktop" "$STAGE/etc/xdg/autostart/"
 ln -s "/usr/lib/$PACKAGE/completions/claude-pet.bash" \
       "$STAGE/usr/share/bash-completion/completions/claude-pet"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/usr/share/doc/$PACKAGE/"

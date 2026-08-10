@@ -631,8 +631,13 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
         print(f"{_settings_file(True)}: added hooks for {added} event(s); existing ones untouched")
         return 0
 
+    quiet = bool(getattr(args, "quiet", False))
     wanted = [args.agent] if getattr(args, "agent", None) else agents.detect()
     if not wanted:
+        if quiet:
+            # Run from the login autostart entry, where a user with no coding
+            # agent installed is an ordinary state and not worth a word.
+            return 0
         print("claude-pet: no supported agent found on this machine", file=sys.stderr)
         return 1
 
@@ -643,23 +648,26 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
             status = 1
             continue
         if not _uses_settings_file(agent_id):
-            print(f"  {agents.label(agent_id):<12} not wired up yet — see the README")
+            if not quiet:
+                print(f"  {agents.label(agent_id):<12} not wired up yet — see the README")
             continue
         path = agents.settings_path(agent_id)
         if str(path).endswith('.toml'):
             added = _install_toml_hooks(path, agent_id)
-            if added:
-                print(f'  {agents.label(agent_id):<12} {path}  added {added} event(s)')
-                print(f'  {"":<12} approve them once in Codex with /hooks')
-            else:
-                print(f'  {agents.label(agent_id):<12} {path}  already installed')
+            if not quiet:
+                if added:
+                    print(f'  {agents.label(agent_id):<12} {path}  added {added} event(s)')
+                    print(f'  {"":<12} approve them once in Codex with /hooks')
+                else:
+                    print(f'  {agents.label(agent_id):<12} {path}  already installed')
             continue
         added = _install_hooks_into(path, agent_id)
         if added < 0:
             status = 1
             continue
-        note = f"added {added} event(s)" if added else "already installed"
-        print(f"  {agents.label(agent_id):<12} {path}  {note}")
+        if not quiet:
+            note = f"added {added} event(s)" if added else "already installed"
+            print(f"  {agents.label(agent_id):<12} {path}  {note}")
     return status
 
 
@@ -1328,6 +1336,9 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--project", action="store_true", help="use ./.claude/settings.json instead of the global one")
     install.add_argument(
         "--agent", choices=agents.known(), help="just this one, instead of all of them"
+    )
+    install.add_argument(
+        "--quiet", action="store_true", help="say nothing; for the login autostart entry"
     )
     install.set_defaults(func=cmd_install_hooks)
 

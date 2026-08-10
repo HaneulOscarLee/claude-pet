@@ -31,7 +31,7 @@ for _namespace, _version in (
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
-from . import config, desktop, jump, sprites, state, tray  # noqa: E402
+from . import config, desktop, jump, petting, sprites, state, tray  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
@@ -48,7 +48,6 @@ DESKTOP_KEEPALIVE_SECONDS = 300.0
 
 #: Shown where a session's project name goes. The app has no working directory.
 DESKTOP_LABEL = "Claude Desktop"
-EDGE_MARGIN = 12
 
 #: Look frames ordered left-to-right. A v2 sheet stores 16 yaw poses across
 #: rows 9-10; row 10 holds the left half of the sweep and row 9 the right half.
@@ -90,6 +89,7 @@ LABELS: dict[str, dict[str, str]] = {
         "failed": "failed",
         "waving": "session started",
         "menu.walk": "Wander around",
+        "menu.petting": "Enjoy being petted",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
         "menu.desktop": "Follow Claude Desktop",
@@ -128,6 +128,7 @@ LABELS: dict[str, dict[str, str]] = {
         "failed": "실패",
         "waving": "세션 시작",
         "menu.walk": "돌아다니기",
+        "menu.petting": "쓰담쓰담 받기",
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
         "menu.desktop": "Claude Desktop 연동",
@@ -194,6 +195,26 @@ PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
 
 #: Below this, saying how long something has been going is just noise.
 ELAPSED_FLOOR_SECONDS = 45
+
+
+#: What it says when stroked. Its own table rather than an entry in PHRASES,
+#: because being petted is not one of the states the pet reports -- those come
+#: from the agents, and this one comes from you.
+PETTED: dict[str, tuple[str, ...]] = {
+    "en": ("♥", "that's nice", "again", "hello you"),
+    "ko": ("♥", "좋아", "더 해줘", "헤헤"),
+}
+
+
+def resolve_petted(language: str) -> tuple[str, ...]:
+    if language in PETTED:
+        return PETTED[language]
+    if language == "auto":
+        for variable in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            value = os.environ.get(variable, "")
+            if value:
+                return PETTED.get(value.split("_")[0].lower(), PETTED["en"])
+    return PETTED["en"]
 
 
 def resolve_phrases(language: str) -> dict[str, tuple[str, ...]]:
@@ -342,6 +363,11 @@ class Overlay(Gtk.Window):
         self.sprite_top = self.bubble_space
         #: Offset from the pointer to the sprite's corner, held during a drag.
         self.drag_offset: tuple[int, int] | None = None
+
+        #: Recognises the back-and-forth of a hovering pointer.
+        self.stroke = petting.Stroke()
+        self.petted_count = int(settings.get("petted_count") or 0)
+        self.phrases_petted = resolve_petted(language)
 
         self._configure_window()
         self._place_initial()
@@ -1171,6 +1197,9 @@ class Overlay(Gtk.Window):
         """
         if not self.dragging:
             if self.press_origin is None:
+                # Not a drag and not on the way to one: the pointer is just
+                # over the pet, which is where being stroked happens.
+                self._note_stroke(int(event.x_root))
                 return False
             start_x, start_y = self.press_origin
             if math.hypot(event.x_root - start_x, event.y_root - start_y) < DRAG_THRESHOLD:
@@ -1178,6 +1207,7 @@ class Overlay(Gtk.Window):
             self.press_origin = None
             self.dragging = True
             self.drag_offset = (int(start_x) - self.sprite_x, int(start_y) - self.sprite_y)
+            self.stroke.reset()
             # Widen the target while dragging: the sprite is a small thing to
             # keep a pointer inside, and losing it mid-drag drops the pet.
             self._apply_input_shape()
@@ -1223,6 +1253,34 @@ class Overlay(Gtk.Window):
 
         result = jump.to_session(self.locator)
         self._flash(result.message)
+
+    def _note_stroke(self, x: int) -> None:
+        """Watch a hovering pointer for the back-and-forth of being stroked.
+
+        Only the direction matters, not the distance: what separates stroking
+        from crossing the sprite on the way elsewhere is that a stroke turns
+        around. Small movements are ignored outright, so a hand resting on the
+        mouse never adds up to affection.
+        """
+        if not self.settings.get("petting", True):
+            return
+        if self.stroke.feed(x, time.monotonic()):
+            self._enjoy_petting()
+
+    def _enjoy_petting(self) -> None:
+        """React to being stroked, without pretending it changed anything.
+
+        Deliberately a flash and an animation rather than a state: the pet's
+        state belongs to what the agents are doing, and a pet that reported
+        `waving` because it was tickled would be lying about the thing it
+        exists to report.
+        """
+        self.petted_count += 1
+        config.update(petted_count=self.petted_count)
+        self._halt_walk(pause=2.0)  # stand still to be fussed over
+        self._react("waving")
+        self._flash(random.choice(self.phrases_petted), seconds=2.5)
+        trace(f"petted ({self.petted_count} total)")
 
     def _react(self, name: str) -> None:
         """Play `name` once, then go back to whatever the state was showing."""
@@ -1336,6 +1394,7 @@ class Overlay(Gtk.Window):
 
         toggles = [
             ("walk", self.labels["menu.walk"], True),
+            ("petting", self.labels["menu.petting"], True),
             ("notifications", self.labels["menu.notify"], False),
             ("autostart", self.labels["menu.autostart"], True),
             ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
@@ -1468,6 +1527,7 @@ class Overlay(Gtk.Window):
         config.update(language=choice)
         self.labels = resolve_labels(choice)
         self.phrases = resolve_phrases(choice)
+        self.phrases_petted = resolve_petted(choice)
         options = self.phrases.get(self.state) or (self.labels.get(self.state, self.state),)
         self.phrase = random.choice(options)
         self.queue_draw()

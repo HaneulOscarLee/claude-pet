@@ -49,6 +49,10 @@ jobs:
       - name: Geometry tests
         run: python3 tests/test_geometry.py
 
+      # Telling a stroke apart from a pointer merely crossing the sprite.
+      - name: Petting tests
+        run: python3 tests/test_petting.py
+
       - name: Bundled pack parses
         run: |
           python3 - <<'PY'
@@ -87,6 +91,7 @@ jobs:
           /tmp/debroot/usr/lib/claude-pet/claude-pet --help > /dev/null
           test -L /tmp/debroot/usr/bin/claude-pet
           desktop-file-validate /tmp/debroot/usr/share/applications/claude-pet.desktop
+          desktop-file-validate /tmp/debroot/etc/xdg/autostart/claude-pet-autostart.desktop
 
       - name: Hook bridge accepts every event
         run: |

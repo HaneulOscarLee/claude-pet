@@ -20,6 +20,8 @@ DEFAULTS: dict[str, Any] = {
     "language": "auto",   # bubble label language: auto (locale) | en | ko
     "bubble": "active",   # when to show the bubble: active | alerts | never
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
+    "petting": True,      # react to being stroked with the pointer
+    "petted_count": 0,    # how many times it has been, kept across restarts
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background
     # Follow the Claude Desktop app too: report its chat replies, and count it

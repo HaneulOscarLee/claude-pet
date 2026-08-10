@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=claude-pet setup
+Comment=Wire claude-pet into the coding agents this user has
+# The package installs the program; the hooks live in the user's own
+# configuration and root cannot write those on their behalf. Without this the
+# .deb installs cleanly, the next Claude session starts, and nothing happens --
+# with nothing on screen to say why. Idempotent, silent, and a no-op for users
+# who have no coding agent installed.
+Exec=claude-pet install-hooks --quiet
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=GNOME;KDE;XFCE;MATE;Cinnamon;LXQt;Unity;

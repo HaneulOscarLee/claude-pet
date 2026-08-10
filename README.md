@@ -61,8 +61,11 @@ Download the `.deb` from
 open it. GNOME Software installs it and pulls in GTK, Pillow and `wmctrl` for
 you.
 
-Then launch **claude-pet** once from your applications menu. That finishes the
-user side of the setup — a sprite pack, the Claude Code hooks in your own
+The hooks go into your own `~/.claude/settings.json`, which a package installing
+as root cannot write for you — so they are wired up at your next login, by an
+autostart entry that does nothing else and says nothing. Log out and back in,
+or skip the wait by launching **claude-pet** once from your applications menu.
+Either finishes the user side of the setup — a sprite pack, the Claude Code hooks in your own
 `~/.claude/settings.json`, tab completion — and starts the pet. Nothing to type.
 
 After that, everything day-to-day is in the pet's right-click menu: install and
@@ -574,12 +577,23 @@ so this is how you get a picture of the window.
 |---|---|
 | click | **jump to that session** (see below), or pin the bubble if there is nowhere to jump |
 | drag | move the pet — mid-stride is fine; it stops the moment you grab it |
+| hover and rub back and forth | pet it |
 | right-click | everything below, without a terminal |
 
 Drag it anywhere on any screen, right up to the top edge: the pet keeps the
 bubble above itself normally and puts it underneath when there is no room, so
 what stops at the edge of the screen is the pet rather than the invisible box
 it is drawn in. It stays on whichever monitor you drop it on.
+
+Stroking it is a gesture rather than a click: move the pointer back and forth
+over the sprite and it stops walking, perks up and says something. What tells
+that apart from a pointer merely crossing the sprite is that a stroke turns
+around — three reversals inside a second and a half, ignoring movements too
+small to be deliberate, so a hand resting on the mouse never counts. It reacts
+once per rub rather than once per sweep. Being petted is deliberately *not* a
+state: the states belong to what your agents are doing, and a pet reporting
+`waving` because it was tickled would be lying about the thing it exists to
+report. Turn it off with **Enjoy being petted** in the menu.
 
 The right-click menu covers day-to-day use on its own: switch pack, browse the
 gallery, install a pet (paste its id or just its gallery link), remove the
