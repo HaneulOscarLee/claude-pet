@@ -620,9 +620,13 @@ walks over, across monitors if it has to, stopping short so it is not sitting
 on whatever you were about to click. Waving right beside the pet works too;
 only the sprite itself is excluded, since that is where stroking happens.
 
-It answers at once and then walks over a little brisker than it wanders, which
-on a wide desk still takes a while. That is the intent: a pet that crosses two
-monitors in a second is a cursor with a sprite on it.
+It waves the moment it hears you and says **coming** for as long as the walk
+takes, which on a wide desk is a while — it goes a little brisker than it
+wanders and no more, since a pet that crosses two monitors in a second is a
+cursor with a sprite on it. It follows the pointer as it goes, so moving on
+while it walks does not leave it arriving where you used to be, and it stops
+beside the pointer rather than on top of it — the sprite swallows clicks, and
+a pet parked on the cursor is a pet in the way.
 
 Wandering stays along the ground, sideways only. Up and down is for being
 called — something you asked for, rather than something it does on its own. A keyboard shortcut

@@ -31,6 +31,10 @@ STROKE_PIXELS = 8
 #: ordinary curve of a pointer on its way somewhere is not.
 TURN_RADIANS = 2.2 * math.pi
 
+#: What a summons asks for: about four fifths of a circle. Less than a rub,
+#: because the gesture is bigger and therefore slower.
+CALL_TURN_RADIANS = 1.6 * math.pi
+
 #: Reversals only belong to the same gesture within this long of each other.
 WINDOW_SECONDS = 1.6
 
@@ -45,7 +49,14 @@ class Stroke:
     moment the gesture completes -- once per rub, not once per wobble.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, turn_radians: float = TURN_RADIANS) -> None:
+        #: Stroking and summoning want different amounts of it. A rub gives
+        #: half a turn per sweep and happens on a sprite barely a hundred
+        #: pixels wide, so it can ask for a lot; a summons is often a circle
+        #: drawn at arm's length, and a big circle at an ordinary hand speed
+        #: takes seconds per revolution -- ask for more than one and a
+        #: normal-sized circle never finishes in time.
+        self.turn_radians = turn_radians
         self.x: int | None = None
         self.y = 0
         self.at = 0.0
@@ -97,7 +108,7 @@ class Stroke:
         self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
         self.x, self.y, self.at = x, y, now
 
-        if self.turned < TURN_RADIANS or now < self.ready_at:
+        if self.turned < self.turn_radians or now < self.ready_at:
             return False
         self.turned = 0.0
         self.ready_at = now + COOLDOWN_SECONDS

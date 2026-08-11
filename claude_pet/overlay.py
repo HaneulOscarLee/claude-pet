@@ -113,6 +113,8 @@ LABELS: dict[str, dict[str, str]] = {
         "toast.installed": "installed {pet}",
         "toast.removed": "removed {pet}",
         "toast.reset": "back to its corner",
+        "toast.coming": "coming",
+        "toast.arrived": "here",
         "menu.pets": "Pets…",
         "menu.language": "Language…",
         "menu.reset": "Reset position",
@@ -156,6 +158,8 @@ LABELS: dict[str, dict[str, str]] = {
         "toast.installed": "{pet} 설치됨",
         "toast.removed": "{pet} 삭제됨",
         "toast.reset": "제자리로 돌아왔어요",
+        "toast.coming": "가는 중",
+        "toast.arrived": "왔어요",
         "menu.pets": "펫 관리…",
         "menu.language": "언어…",
         "menu.reset": "위치 초기화",
@@ -279,9 +283,16 @@ CALL_POLL_MS = 50
 #: times a second for nothing.
 MOTION_POLL_MS = 16
 
-#: How near the pointer counts as arrived. Standing under it would put the
-#: sprite between you and whatever you were about to click.
-CALL_ARRIVAL_PIXELS = 40
+#: How near the pointer counts as arrived: touching it, near enough. Not
+#: centred on it -- the sprite swallows clicks, so a pet parked exactly
+#: under the cursor is a pet in the way -- but close enough to have plainly
+#: come when called, which stopping a whole sprite's width short did not
+#: look like.
+CALL_ARRIVAL_PIXELS = 8
+
+#: How long it stays put after arriving. Wandering off the moment it got
+#: there read as never having stopped at all.
+CALL_REST_SECONDS = 25.0
 
 #: How much brisker than a wander a summoned pet is.
 #:
@@ -412,7 +423,7 @@ class Overlay(Gtk.Window):
         #: Recognises the back-and-forth of a hovering pointer -- over the
         #: pet it means affection, away from it means come here.
         self.stroke = petting.Stroke()
-        self.call_stroke = petting.Stroke()
+        self.call_stroke = petting.Stroke(petting.CALL_TURN_RADIANS)
         self.called_at = 0.0
         self.pointer_checked_at = 0.0
         #: The tail of a drag, and the throw it may have ended in.
@@ -1125,6 +1136,15 @@ class Overlay(Gtk.Window):
         if self.throw is not None:
             self._advance_throw(now)
         elif self.walk_target is not None:
+            # Aim at where the pointer is now, not where it was when called.
+            # You move on while it walks, and a pet arriving at the place
+            # you used to be has answered a question nobody asked.
+            here = self._pointer_position()
+            if here is not None:
+                self.walk_target = (
+                    here[0] - self.view.width // 2,
+                    here[1] - self.view.height // 2,
+                )
             self._advance_errand(elapsed)
         else:
             self.motion_running = False
@@ -1162,15 +1182,20 @@ class Overlay(Gtk.Window):
         remaining_y = target_y - self.sprite_y
         distance = math.hypot(remaining_x, remaining_y)
 
-        # Stopping short: standing under the pointer would put the sprite
-        # between you and whatever you were about to click.
-        if distance <= max(self.view.width, CALL_ARRIVAL_PIXELS):
+        # Beside the pointer rather than under it: the sprite swallows
+        # clicks, so parking on the cursor would put the pet in the way of
+        # whatever you called it over to look at.
+        if distance <= self.view.width / 2 + CALL_ARRIVAL_PIXELS:
             self.walk_target = None
             self.errand_at = None
             self.walking = 0
             self.visual_state = "idle"
             self.frame_index = 0
+            # And then stay. Setting off wandering the instant it arrived
+            # made the whole errand look like it had never stopped.
+            self._halt_walk(pause=CALL_REST_SECONDS)
             self._react("waving")
+            self._flash(self.labels["toast.arrived"], seconds=2.0)
             self.settings["position"] = [self.pos_x, self.pos_y]
             config.update(position=self.settings["position"])
             return
@@ -1266,6 +1291,9 @@ class Overlay(Gtk.Window):
         # Answer before setting off. Crossing a wide desk takes a moment
         # even at speed, and a gesture with no acknowledgement for a second
         # and a half is one you assume did not work.
+        # Answer visibly: a wave, and then the bubble says so for as long as
+        # the walk takes. A gesture you cannot tell was heard is one you
+        # assume did not work.
         self._react("waving")
         self._start_motion()
         trace(f"called to x={x}")
@@ -1305,6 +1333,12 @@ class Overlay(Gtk.Window):
         # tool name in the bubble is the most useful thing on screen.
         if self.bubble_pinned or time.monotonic() < self.flash_until:
             return True
+        # Say so for the whole walk, not for a moment at the start of it.
+        # A summoned pet crosses a wide desk slowly, and a three-second
+        # acknowledgement followed by a minute of silent walking is one you
+        # miss and then assume never happened.
+        if self.walk_target is not None:
+            return True
         mode = str(self.settings.get("bubble") or "active")
         if mode == "never":
             return False
@@ -1315,6 +1349,8 @@ class Overlay(Gtk.Window):
     def _bubble_text(self) -> str:
         if time.monotonic() < self.flash_until:
             return self.flash_text
+        if self.walk_target is not None:
+            return self.labels["toast.coming"]
 
         fallback = self.labels.get(self.state, self.state)
         phrase = self.phrase or fallback

@@ -86,6 +86,40 @@ def directions() -> list[tuple[str, bool]]:
     return results
 
 
+def summons() -> list[tuple[str, bool]]:
+    """A summons asks for less turning than a rub, and has to.
+
+    A rub happens on a sprite a hundred pixels wide and gives half a turn per
+    sweep, so it can ask for plenty. A summons is often a circle drawn at arm's
+    length, and a big circle at an ordinary hand speed takes seconds per
+    revolution -- asking for more than one meant a normal-sized circle never
+    finished in time and looked like the gesture did nothing.
+    """
+    import math
+
+    def circle(radius: int, speed: float, seconds: float = 3.0) -> bool:
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS)
+        moment = 0.0
+        turns_per_second = speed / (2 * math.pi * radius)
+        while moment < seconds:
+            angle = 2 * math.pi * turns_per_second * moment
+            if stroke.feed(int(700 + radius * math.cos(angle)), moment,
+                           int(500 + radius * math.sin(angle))):
+                return True
+            moment += 0.05
+        return False
+
+    results = [("a summons asks less than a rub",
+                petting.CALL_TURN_RADIANS < petting.TURN_RADIANS)]
+    # Small, medium and large, each at a speed someone would actually draw it.
+    for radius, speed in ((25, 400), (100, 600), (250, 1200), (400, 2000)):
+        results.append((f"a circle of radius {radius} is a summons", circle(radius, speed)))
+    # A rub is still a rub: the stricter threshold is the default.
+    results.append(("the default is still the stricter one",
+                    petting.Stroke().turn_radians == petting.TURN_RADIANS))
+    return results
+
+
 def rejects() -> list[tuple[str, bool]]:
     """The half that matters more: things that must never read as affection."""
     results = []
@@ -141,7 +175,8 @@ def rejects() -> list[tuple[str, bool]]:
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("triggers", triggers()), ("directions", directions()), ("rejects", rejects())):
+    for label, results in (("triggers", triggers()), ("directions", directions()),
+                            ("summons", summons()), ("rejects", rejects())):
         print(f"{label}:")
         for name, ok in results:
             total += 1
