@@ -327,7 +327,19 @@ def stars() -> list[tuple[str, bool]]:
                             trace(pentagram(), seconds, phase=phase)))
     results.append(("a wobbly lopsided star still is",
                     trace(pentagram(skew=0.8), 1.5, jitter=6)))
-    results.append(("a small one does too", trace(pentagram(radius=70), 1.2)))
+    # Size. Teleporting is the more disruptive of the two answers -- the pet is
+    # simply somewhere else -- so it asks for a drawing nobody makes by
+    # accident, well over twice what a circle asks for. A pentagram of radius R
+    # measures about 1.9R across.
+    results.append((f"a big star is one (radius 140, {int(1.9 * 140)}px across)",
+                    trace(pentagram(radius=140), 1.5)))
+    results.append(("...and one just over the line is",
+                    trace(pentagram(radius=125), 1.5)))
+    for radius in (100, 70, 40):
+        results.append((f"a star only {int(1.9 * radius)}px across is too small",
+                        not trace(pentagram(radius=radius), 1.2)))
+    results.append(("a star asks for more room than a circle",
+                    petting.STAR_SPAN_PIXELS > 2 * petting.CALL_SPAN_PIXELS))
 
     # Five points, but only four corners are ever seen: the closing edge ends
     # where the drawing started rather than carrying on through it. Asking for

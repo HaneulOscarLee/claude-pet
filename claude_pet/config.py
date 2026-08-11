@@ -40,6 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "call_seconds": 0.4,   # how quickly the circle must be drawn
     "call_size": 90,       # how big it must be, across
     "call_roundness": 0.6, # how round: short axis over long, 1 being a circle
+    "star_size": 220,      # how big a star has to be, across, to teleport
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background
     # Follow the Claude Desktop app too: report its chat replies, and count it

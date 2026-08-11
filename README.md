@@ -317,6 +317,7 @@ claude-pet set language ko
 | `call_seconds` | `0.4` | how quickly the circle must be drawn |
 | `call_size` | `90` | how big it must be, across |
 | `call_roundness` | `0.6` | how round: short axis over long |
+| `star_size` | `220` | how big a star must be, across, to teleport |
 | `fps` | `10` | animation frames per second |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
 | `update_check` | `true` | look for a newer version in the background |
@@ -369,8 +370,10 @@ wanders and no more. Wandering itself stays along the ground, sideways only;
 up and down is for being called.
 
 **A star teleports it** there instead, for when a walk across two monitors is
-a wait rather than a charm. A star is corners where a circle is a curve, which
-is how they are told apart: the five points each turn about 144 degrees, all
+a wait rather than a charm. It has to be a big one — well over twice the room
+a circle needs — because appearing somewhere else is the more disruptive
+answer of the two, and worth asking for a drawing nobody makes by accident. A
+star is corners where a circle is a curve, which is how they are told apart: the five points each turn about 144 degrees, all
 the same way round, with straight runs between. A circle, a square, a triangle
 and a zigzag are none of them stars, and a star does not also read as a
 circle.

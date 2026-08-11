@@ -303,7 +303,12 @@ STAR_CORNERS = 4
 #: How big, across, and how long it may take. A star is more drawing than a
 #: circle is, so it gets longer -- but not all day, or any scribble
 #: eventually qualifies.
-STAR_SPAN_PIXELS = 120
+#:
+#: Well over twice the circle's minimum, and raised from 120 after small ones
+#: were going off. Teleporting is the more disruptive of the two answers -- the
+#: pet is simply somewhere else -- so it is worth asking for something nobody
+#: draws by accident. Adjustable in the tuning window either way.
+STAR_SPAN_PIXELS = 220
 STAR_SECONDS = 2.5
 
 

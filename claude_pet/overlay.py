@@ -105,6 +105,7 @@ LABELS: dict[str, dict[str, str]] = {
         "tune.call_seconds": "Call · draw it within",
         "tune.call_size": "Call · circle size",
         "tune.call_roundness": "Call · how round",
+        "tune.star_size": "Star · size needed",
         "menu.look": "Watch the pointer",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
@@ -188,6 +189,7 @@ LABELS: dict[str, dict[str, str]] = {
         "tune.call_seconds": "부르기 · 그리는 시간",
         "tune.call_size": "부르기 · 원 크기",
         "tune.call_roundness": "부르기 · 원형 정도",
+        "tune.star_size": "별 · 필요한 크기",
         "menu.back": "‹ 뒤로",
         "menu.settings": "설정",
         "lang.auto": "자동",
@@ -1310,6 +1312,7 @@ class Overlay(Gtk.Window):
         ("call_seconds", 0.2, 2.0, 0.1, 1),
         ("call_size", 40.0, 300.0, 10.0, 0),
         ("call_roundness", 0.3, 0.9, 0.05, 2),
+        ("star_size", 120.0, 500.0, 20.0, 0),
     )
 
     def _number(self, key: str, default: float) -> float:
@@ -1343,7 +1346,9 @@ class Overlay(Gtk.Window):
             seconds=self._number("call_seconds", petting.CALL_SECONDS),
             roundness=self._number("call_roundness", petting.CALL_ROUNDNESS),
         )
-        self.star_stroke = petting.Star()
+        self.star_stroke = petting.Star(
+            span_pixels=int(self._number("star_size", petting.STAR_SPAN_PIXELS)),
+        )
 
     def _tune(self, key: str, value: float) -> None:
         """Apply a slider straight away, and save it shortly after.
