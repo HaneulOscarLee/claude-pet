@@ -98,7 +98,8 @@ def summons() -> list[tuple[str, bool]]:
     import math
 
     def circle(radius: int, speed: float, seconds: float = 3.0) -> bool:
-        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS)
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
+                                one_way=True)
         moment = 0.0
         turns_per_second = speed / (2 * math.pi * radius)
         while moment < seconds:
@@ -129,6 +130,28 @@ def summons() -> list[tuple[str, bool]]:
     # Stroking asks for no minimum size: it happens on a sprite barely a
     # hundred pixels wide, and could not ask for one.
     results.append(("a rub has no size requirement", petting.Stroke().span_pixels == 0))
+
+    # Only going round counts. Waving the pointer about while working was
+    # summoning the pet, because adding up the sizes of the turns cannot
+    # tell a circle from a wave -- the wave's turns cancel out only if the
+    # sign is kept.
+    def wave(axis: str, seconds: float = 3.0) -> bool:
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
+                                one_way=True)
+        moment = 0.0
+        while moment < seconds:
+            offset = 150 * math.sin(2 * math.pi * 1.5 * moment)
+            x = 700 + (offset if axis in ('x', 'diagonal') else 0)
+            y = 500 + (offset if axis in ('y', 'diagonal') else 0)
+            if stroke.feed(int(x), moment, int(y)):
+                return True
+            moment += 0.05
+        return False
+
+    for axis in ('x', 'y', 'diagonal'):
+        results.append((f"waving along {axis} is not a summons", not wave(axis)))
+    results.append(("a reversal is not counted as going round",
+                    petting.REVERSAL_RADIANS < math.pi))
     return results
 
 

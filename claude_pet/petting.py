@@ -35,6 +35,11 @@ TURN_RADIANS = 2.2 * math.pi
 #: because the gesture is bigger and therefore slower.
 CALL_TURN_RADIANS = 1.6 * math.pi
 
+#: Past this, a change of direction is a reversal rather than a curve.
+#: Three quarters of a half-turn: enough room for a hand drawing a circle
+#: in coarse steps, far from the doubling back of a wave.
+REVERSAL_RADIANS = 0.75 * math.pi
+
 #: How big the gesture has to be, measured across whatever it drew.
 #:
 #: Turning alone does not say how large a thing was drawn, and a tiny
@@ -58,7 +63,12 @@ class Stroke:
     moment the gesture completes -- once per rub, not once per wobble.
     """
 
-    def __init__(self, turn_radians: float = TURN_RADIANS, span_pixels: int = 0) -> None:
+    def __init__(
+        self,
+        turn_radians: float = TURN_RADIANS,
+        span_pixels: int = 0,
+        one_way: bool = False,
+    ) -> None:
         #: Stroking and summoning want different amounts of it. A rub gives
         #: half a turn per sweep and happens on a sprite barely a hundred
         #: pixels wide, so it can ask for a lot; a summons is often a circle
@@ -70,6 +80,14 @@ class Stroke:
         #: sprite is confined to the sprite and cannot ask for much; a
         #: summons drawn anywhere on screen can.
         self.span_pixels = span_pixels
+        #: Whether the turning has to keep going the same way round.
+        #:
+        #: A circle does; a wave does not, its turns cancelling out. Adding
+        #: up the sizes of the turns cannot tell them apart, so waving the
+        #: pointer about while working summoned the pet. Keeping the sign
+        #: separates them exactly: two loops of a circle come to +3.9pi,
+        #: the same length of wave to 0.
+        self.one_way = one_way
         self.low_x = self.high_x = 0
         self.low_y = self.high_y = 0
         self.x: int | None = None
@@ -78,6 +96,7 @@ class Stroke:
         self.direction_x = 0.0
         self.direction_y = 0.0
         self.turned = 0.0
+        self.turned_signed = 0.0
         self.ready_at = 0.0
 
     def reset(self) -> None:
@@ -85,7 +104,7 @@ class Stroke:
         self.x = None
         self.direction_x = 0.0
         self.direction_y = 0.0
-        self.turned = 0.0
+        self.turned = self.turned_signed = 0.0
         self.low_x = self.high_x = 0
         self.low_y = self.high_y = 0
 
@@ -112,7 +131,7 @@ class Stroke:
             return False
 
         if now - self.at > WINDOW_SECONDS:
-            self.turned = 0.0  # whatever came before was a different gesture
+            self.turned = self.turned_signed = 0.0  # whatever came before was a different gesture
             self.low_x = self.high_x = x
             self.low_y = self.high_y = y
         self.low_x, self.high_x = min(self.low_x, x), max(self.high_x, x)
@@ -122,23 +141,30 @@ class Stroke:
             # turns half a circle every time it goes back; a circle turns a
             # whole one each loop; a pointer crossing the sprite on its way
             # somewhere turns almost nothing.
-            self.turned += abs(
-                math.atan2(
-                    self.direction_x * travelled_y - self.direction_y * travelled_x,
-                    self.direction_x * travelled_x + self.direction_y * travelled_y,
-                )
+            angle = math.atan2(
+                self.direction_x * travelled_y - self.direction_y * travelled_x,
+                self.direction_x * travelled_x + self.direction_y * travelled_y,
             )
+            self.turned += abs(angle)
+            # A turn of nearly half a circle is a reversal, not a rotation,
+            # and must not count towards going round. It also has no
+            # reliable sign: reverse exactly and the cross product is zero,
+            # so atan2 answers +pi every time and a plain back-and-forth
+            # accumulates in one direction exactly as a circle would.
+            if abs(angle) < REVERSAL_RADIANS:
+                self.turned_signed += angle
         self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
         self.x, self.y, self.at = x, y, now
 
         span = max(self.high_x - self.low_x, self.high_y - self.low_y)
+        turning = abs(self.turned_signed) if self.one_way else self.turned
         if (
-            self.turned < self.turn_radians
+            turning < self.turn_radians
             or span < self.span_pixels
             or now < self.ready_at
         ):
             return False
-        self.turned = 0.0
+        self.turned = self.turned_signed = 0.0
         self.low_x = self.high_x = x
         self.low_y = self.high_y = y
         self.ready_at = now + COOLDOWN_SECONDS

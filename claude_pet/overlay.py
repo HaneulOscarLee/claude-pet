@@ -432,7 +432,7 @@ class Overlay(Gtk.Window):
         #: Recognises the back-and-forth of a hovering pointer -- over the
         #: pet it means affection, away from it means come here.
         self.stroke = petting.Stroke()
-        self.call_stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS)
+        self.call_stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS, one_way=True)
         self.called_at = 0.0
         self.pointer_checked_at = 0.0
         #: The tail of a drag, and the throw it may have ended in.
