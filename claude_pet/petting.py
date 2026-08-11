@@ -49,6 +49,15 @@ REVERSAL_RADIANS = 0.75 * math.pi
 #: to be deliberate.
 CALL_SPAN_PIXELS = 90
 
+#: How round it has to be: the shorter side of what was drawn, as a
+#: fraction of the longer.
+#:
+#: Size alone was measured across the widest part, so a long thin loop --
+#: or a squiggle that happened to double back -- counted as a circle. A
+#: hand-drawn circle is never perfect, so this is generous; it only rules
+#: out shapes nobody would call round.
+CALL_ROUNDNESS = 0.45
+
 #: Reversals only belong to the same gesture within this long of each other.
 WINDOW_SECONDS = 1.6
 
@@ -156,11 +165,15 @@ class Stroke:
         self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
         self.x, self.y, self.at = x, y, now
 
-        span = max(self.high_x - self.low_x, self.high_y - self.low_y)
+        wide = self.high_x - self.low_x
+        tall = self.high_y - self.low_y
+        span = max(wide, tall)
         turning = abs(self.turned_signed) if self.one_way else self.turned
+        round_enough = not self.span_pixels or min(wide, tall) >= span * CALL_ROUNDNESS
         if (
             turning < self.turn_radians
             or span < self.span_pixels
+            or not round_enough
             or now < self.ready_at
         ):
             return False

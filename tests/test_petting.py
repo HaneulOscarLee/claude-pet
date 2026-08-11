@@ -127,6 +127,30 @@ def summons() -> list[tuple[str, bool]]:
                         not circle(radius, 400)))
     results.append(("...but a coin-sized one is", circle(45, 400)))
 
+    # Size was measured across the widest part alone, so a long thin loop
+    # counted as a circle -- and reported as such: shapes nobody would call
+    # round were summoning the pet.
+    def ellipse(across: int, down: int, seconds: float = 3.0) -> bool:
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
+                                one_way=True)
+        moment = 0.0
+        while moment < seconds:
+            angle = 2 * math.pi * moment  # one revolution a second
+            if stroke.feed(int(700 + across * math.cos(angle) / 2), moment,
+                           int(500 + down * math.sin(angle) / 2)):
+                return True
+            moment += 0.05
+        return False
+
+    for across, down in ((400, 120), (500, 80), (600, 50), (120, 500)):
+        results.append((f"a {across}x{down} sliver is not a summons",
+                        not ellipse(across, down)))
+    # Nobody draws a true circle freehand, so an oval still has to count.
+    for across, down in ((180, 180), (240, 180), (300, 160)):
+        results.append((f"a {across}x{down} oval is still a summons",
+                        ellipse(across, down)))
+    results.append(("roundness is not asked of a rub", petting.Stroke().span_pixels == 0))
+
     # Stroking asks for no minimum size: it happens on a sprite barely a
     # hundred pixels wide, and could not ask for one.
     results.append(("a rub has no size requirement", petting.Stroke().span_pixels == 0))
