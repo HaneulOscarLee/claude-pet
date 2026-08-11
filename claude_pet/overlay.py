@@ -92,6 +92,8 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.petting": "Enjoy being petted",
         "menu.throwing": "Can be thrown",
         "menu.call": "Come when waved at",
+        "menu.behaviour": "Behaviour…",
+        "menu.look": "Watch the pointer",
         "menu.come": "Come here",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
@@ -134,6 +136,8 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.petting": "쓰담쓰담 받기",
         "menu.throwing": "던지기 허용",
         "menu.call": "부르면 오기",
+        "menu.behaviour": "동작…",
+        "menu.look": "포인터 쳐다보기",
         "menu.come": "이리 와",
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
@@ -257,10 +261,15 @@ DRAG_THRESHOLD = 5
 #: wandering. Enough that it does not look wedged against the side.
 EDGE_MARGIN = 12
 
-#: How often the pointer is read while watching for a summons. The look-at-
-#: mouse poll already does this once a frame, but only while idle; calling
-#: has to work whatever the agents are doing, so it gets its own slower one.
-CALL_POLL_SECONDS = 0.2
+#: How often the pointer is read while watching for a summons.
+#:
+#: Fast, and on its own timer rather than the animation frame. A wave is a
+#: short gesture -- under a second -- and at five reads a second the samples
+#: land either side of a reversal and miss it entirely: measured, a 0.8s
+#: wave never registered at 0.2s and always did at 0.05s. Tying it to the
+#: frame rate would also make a user's `fps` setting decide whether the pet
+#: can hear them.
+CALL_POLL_MS = 50
 
 #: How near the pointer counts as arrived. Standing under it would put the
 #: sprite between you and whatever you were about to click.
@@ -428,6 +437,7 @@ class Overlay(Gtk.Window):
             self._schedule_update_check()
             self._start_desktop_watch()
             self._start_tray()
+            GLib.timeout_add(CALL_POLL_MS, self._listen_for_a_call)
             self.code_stamp = self._code_stamp()
             GLib.timeout_add_seconds(60, self._check_for_new_code)
         self._schedule_frame()
@@ -1011,7 +1021,6 @@ class Overlay(Gtk.Window):
             self._update_walk(now)
         elif self.walking:
             self.walking = 0
-        self._listen_for_a_call(now)
 
         frames = self.view.frames(self.visual_state)
         self.frame_index = (self.frame_index + 1) % max(1, len(frames))
@@ -1127,7 +1136,7 @@ class Overlay(Gtk.Window):
         _screen, x, y = pointer.get_position()
         return int(x), int(y)
 
-    def _listen_for_a_call(self, now: float) -> None:
+    def _listen_for_a_call(self) -> bool:
         """Watch the pointer, anywhere on screen, for being waved at.
 
         A keyboard shortcut would be the obvious way to call a pet, and is not
@@ -1144,14 +1153,13 @@ class Overlay(Gtk.Window):
         would be unbearable.
         """
         if not self.settings.get("call", True) or self.dragging or self.throw is not None:
-            return
-        if now - self.pointer_checked_at < CALL_POLL_SECONDS:
-            return
-        self.pointer_checked_at = now
+            self.call_stroke.reset()
+            return True
 
+        now = time.monotonic()
         position = self._pointer_position()
         if position is None:
-            return
+            return True
         x, y = position
 
         centre_x = self.sprite_x + self.view.width / 2
@@ -1160,10 +1168,11 @@ class Overlay(Gtk.Window):
             # Close enough that this is stroking, not calling. Handing it to
             # the other detector as well would have one gesture mean both.
             self.call_stroke.reset()
-            return
+            return True
 
         if self.call_stroke.feed(x, now):
             self.come_here(x)
+        return True
 
     def come_here(self, x: int | None = None) -> None:
         """Send the pet to the pointer, or to a given x."""
@@ -1399,6 +1408,11 @@ class Overlay(Gtk.Window):
         # keeps going. Speed at the moment of release is the whole
         # difference, which is why only the tail of the drag is measured.
         thrown = self.flick.release() if self.settings.get("throwing", True) else None
+        trace(
+            f"released at {self.flick.speed():.0f} px/s "
+            f"(throw over {motion.THROW_SPEED:.0f}) -> "
+            f"{'throw' if thrown else 'placed'}"
+        )
         self.flick.clear()
         if thrown is not None:
             self.throw = thrown
@@ -1566,11 +1580,22 @@ class Overlay(Gtk.Window):
                 for code in ("auto", "en", "ko")
             ]
 
+        if page == "behaviour":
+            # How it acts, all in one place. These grew one at a time onto the
+            # top level until the settings you actually reach for were buried
+            # under the ones you set once and forget.
+            entries: list[tuple] = [
+                ("toggle", "walk", self.labels["menu.walk"], True),
+                ("toggle", "petting", self.labels["menu.petting"], True),
+                ("toggle", "throwing", self.labels["menu.throwing"], True),
+                ("toggle", "call", self.labels["menu.call"], True),
+            ]
+            # Only offered by a pack that has the poses for it.
+            if self.view.looks:
+                entries.append(("toggle", "look_at_mouse", self.labels["menu.look"], True))
+            return entries
+
         toggles = [
-            ("walk", self.labels["menu.walk"], True),
-            ("petting", self.labels["menu.petting"], True),
-            ("throwing", self.labels["menu.throwing"], True),
-            ("call", self.labels["menu.call"], True),
             ("notifications", self.labels["menu.notify"], False),
             ("autostart", self.labels["menu.autostart"], True),
             ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
@@ -1585,6 +1610,7 @@ class Overlay(Gtk.Window):
             ("separator",),
             ("submenu", self.labels["menu.pets"], "pets"),
             ("submenu", self.labels["menu.language"], "language"),
+            ("submenu", self.labels["menu.behaviour"], "behaviour"),
             ("separator",),
             # High up in both, because it is what you reach for when the pet is
             # somewhere you cannot get at it.

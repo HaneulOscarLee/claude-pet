@@ -17,15 +17,20 @@ import math
 #: Below this, releasing the pet is putting it down rather than throwing it.
 #: Pixels per second, measured over the tail of the drag.
 #:
-#: Set high on purpose. An ordinary drag across a screen peaks well past a
-#: thousand, so a lower bar turned every brisk placement into a throw --
-#: which is worse than missing a throw, because it moves the pet somewhere
-#: the person did not put it.
-THROW_SPEED = 2600.0
+#: Set high on purpose, and raised twice after being reported too eager. An
+#: ordinary drag peaks well past a thousand, and plenty of people let go
+#: while still moving rather than stopping first -- so a low bar turns
+#: ordinary placements into throws, which is the worse way to be wrong: it
+#: puts the pet somewhere its owner did not.
+#:
+#: `claude-pet run` with CLAUDE_PET_DEBUG=1 prints the speed of every
+#: release, so this can be settled with measurements rather than a third
+#: guess.
+THROW_SPEED = 4500.0
 
 #: And it must actually cover ground in that window, so that a shake at the
 #: moment of release cannot reach the speed threshold while going nowhere.
-THROW_TRAVEL = 70.0
+THROW_TRAVEL = 110.0
 
 #: What fraction of its speed a throw keeps after one second. Low, because a
 #: pet that skates about for five seconds stops being funny quickly.
@@ -135,3 +140,21 @@ class Flick:
         if math.hypot(velocity_x, velocity_y) < THROW_SPEED:
             return None
         return Throw(velocity_x, velocity_y)
+
+    def speed(self) -> float:
+        """Straight-line speed at release, in pixels per second.
+
+        Separate from `release` so the number can be reported whatever the
+        verdict: a threshold argued about twice is one to settle with
+        measurements.
+        """
+        if len(self.samples) < 2:
+            return 0.0
+        (first_at, first_x, first_y), (last_at, last_x, last_y) = (
+            self.samples[0],
+            self.samples[-1],
+        )
+        elapsed = last_at - first_at
+        if elapsed <= 0:
+            return 0.0
+        return math.hypot(last_x - first_x, last_y - first_y) / elapsed

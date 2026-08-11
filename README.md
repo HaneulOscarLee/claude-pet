@@ -607,10 +607,12 @@ state: the states belong to what your agents are doing, and a pet reporting
 `waving` because it was tickled would be lying about the thing it exists to
 report. Turn it off with **Enjoy being petted** in the menu.
 
-**Throwing** takes a deliberate flick. An ordinary drag across the screen —
-even a brisk one — puts the pet down where you let go; only the speed in the
-last tenth of a second decides, and the bar is set high, because guessing
-wrong moves the pet somewhere you did not put it.
+**Throwing** takes a deliberate flick — a hard one. An ordinary drag across
+the screen puts the pet down where you let go, and so does a fast one: only
+the speed in the last tenth of a second decides, and the bar sits above what
+a normal drag reaches, because guessing wrong moves the pet somewhere you did
+not put it. Run `claude-pet run` with `CLAUDE_PET_DEBUG=1` and it prints the
+speed of every release, if you want to argue with the number.
 
 **Calling it** is the petting gesture done from a distance: wave the pointer
 back and forth anywhere on screen and the pet walks over, stopping short so

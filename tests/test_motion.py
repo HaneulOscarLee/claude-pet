@@ -46,7 +46,7 @@ def flick_checks() -> list[tuple[str, bool]]:
     for step in range(10):
         flick.record(500 + step * 5, 400, step * 0.1)
     for step in range(6):
-        flick.record(560 + step * 80, 400, 1.0 + step * 0.02)
+        flick.record(560 + step * 140, 400, 1.0 + step * 0.02)
     results.append(("a flick at the end is a throw", flick.release() is not None))
 
     # Reported as too eager: an ordinary drag was being thrown. Anything up to
@@ -62,15 +62,26 @@ def flick_checks() -> list[tuple[str, bool]]:
                 moving.record(500 + travelled, 400, step * 0.02)
         return moving.release()
 
-    for speed in (300, 1200, 2000):
+    # Raised twice after being reported too eager. Plenty of people release
+    # while still moving rather than stopping first, so everything up to a
+    # fast drag has to stay a placement.
+    for speed in (300, 1200, 2000, 3500):
         results.append((f"a drag at {speed} px/s is a placement", at(speed) is None))
-    for speed in (3500, 6000):
+    for speed in (5500, 9000):
         results.append((f"a flick at {speed} px/s is a throw", at(speed) is not None))
 
     # Speed measured straight-line, not as the sum of the parts: adding them
     # made a diagonal drag read half again as fast as it was, so corner-aimed
     # throws fired on gentler flicks than sideways ones.
-    results.append(("a diagonal drag is judged at its true speed", at(2000, diagonal=True) is None))
+    results.append(("a diagonal drag is judged at its true speed", at(3500, diagonal=True) is None))
+
+    # The number the debug line reports, which is how the threshold gets
+    # argued about with measurements instead of opinions.
+    measured = motion.Flick()
+    for step in range(8):
+        measured.record(500 + 2000 * (step * 0.02), 400, step * 0.02)
+    results.append(("release speed is reported", abs(measured.speed() - 2000) < 50))
+    results.append(("...and is 0 with nothing to measure", motion.Flick().speed() == 0.0))
 
     # Fast but going nowhere -- a shake at the moment of release.
     shake = motion.Flick()
