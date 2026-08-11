@@ -112,21 +112,29 @@ def rejects() -> list[tuple[str, bool]]:
                                     index * (petting.WINDOW_SECONDS + 0.5)))
     results.append(("reversals far apart do not add up", reacted == 0))
 
-    # One reversal short of the threshold.
+    # Just under the amount of turning required. One rub back and forth is
+    # a single half-turn; the threshold is above a full circle.
     stroke = petting.Stroke()
-    reacted = 0
-    x, now = 500, 0.0
-    for index in range(petting.REVERSALS):  # N moves == N-1 reversals
-        x += FAR * (1 if index % 2 == 0 else -1)
-        now += 0.1
-        reacted += bool(stroke.feed(x, now))
+    reacted = rub(stroke, 3)
     results.append(("just under the threshold does not fire", reacted == 0))
+
+    # A circle is what a wave and a rub have in common -- turning -- so the
+    # threshold is stated in those terms and checked here.
+    import math
+
+    stroke = petting.Stroke()
+    turned = 0
+    for step in range(40):
+        angle = 2 * math.pi * step / 20  # two full circles
+        turned += bool(stroke.feed(int(600 + 60 * math.cos(angle)), step * 0.05,
+                                   int(500 + 60 * math.sin(angle))))
+    results.append(("a circle counts as a gesture", turned >= 1))
 
     # A drag is not a stroke, and the overlay resets on one.
     stroke = petting.Stroke()
-    rub(stroke, 2)
+    rub(stroke, 3)
     stroke.reset()
-    results.append(("reset forgets a gesture in progress", stroke.reversals == 0))
+    results.append(("reset forgets a gesture in progress", stroke.turned == 0.0))
     return results
 
 

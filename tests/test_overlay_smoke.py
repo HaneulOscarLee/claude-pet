@@ -68,7 +68,7 @@ def checks() -> list[tuple[str, bool]]:
     results.append(("a throw runs to a stop", window.throw is None))
     results.append(("...on screen", window._on_screen(window.sprite_x, window.sprite_y)))
 
-    window.walk_target = window.sprite_x - 400
+    window.walk_target = (window.sprite_x - 400, window.sprite_y - 120)
     for _ in range(200):
         if window.walk_target is None:
             break

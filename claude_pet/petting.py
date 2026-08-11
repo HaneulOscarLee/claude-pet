@@ -20,9 +20,16 @@ import math
 #: rather than the hand shaking on a stationary mouse.
 STROKE_PIXELS = 8
 
-#: Direction changes that add up to being stroked. Two would fire while merely
-#: hesitating over the sprite; three needs deliberate back-and-forth.
-REVERSALS = 3
+#: How far the pointer's direction must turn, in total, to count as a
+#: gesture. Radians.
+#:
+#: Counting reversals -- turns of more than a right angle -- worked for
+#: rubbing back and forth and could never work for a circle, which turns
+#: gradually and reverses never. Accumulated turning covers both: half a
+#: turn per reversal of a rub, a full turn per loop of a circle. Set a
+#: little above one circle, so a small deliberate loop is enough and the
+#: ordinary curve of a pointer on its way somewhere is not.
+TURN_RADIANS = 2.2 * math.pi
 
 #: Reversals only belong to the same gesture within this long of each other.
 WINDOW_SECONDS = 1.6
@@ -42,17 +49,17 @@ class Stroke:
         self.x: int | None = None
         self.y = 0
         self.at = 0.0
-        self.direction_x = 0
-        self.direction_y = 0
-        self.reversals = 0
+        self.direction_x = 0.0
+        self.direction_y = 0.0
+        self.turned = 0.0
         self.ready_at = 0.0
 
     def reset(self) -> None:
         """Forget the gesture in progress, when the pointer leaves or drags."""
         self.x = None
-        self.direction_x = 0
-        self.direction_y = 0
-        self.reversals = 0
+        self.direction_x = 0.0
+        self.direction_y = 0.0
+        self.turned = 0.0
 
     def feed(self, x: int, now: float, y: int = 0) -> bool:
         """Feed a pointer position. `y` is optional; without it, x alone decides.
@@ -75,17 +82,23 @@ class Stroke:
             return False
 
         if now - self.at > WINDOW_SECONDS:
-            self.reversals = 0  # whatever came before was a different gesture
-        # A reversal is a turn of more than a right angle, which is what going
-        # back looks like whichever way the gesture is aligned.
+            self.turned = 0.0  # whatever came before was a different gesture
         if self.direction_x or self.direction_y:
-            if travelled_x * self.direction_x + travelled_y * self.direction_y < 0:
-                self.reversals += 1
-        self.direction_x, self.direction_y = travelled_x, travelled_y
+            # The angle between one movement and the next, added up. A rub
+            # turns half a circle every time it goes back; a circle turns a
+            # whole one each loop; a pointer crossing the sprite on its way
+            # somewhere turns almost nothing.
+            self.turned += abs(
+                math.atan2(
+                    self.direction_x * travelled_y - self.direction_y * travelled_x,
+                    self.direction_x * travelled_x + self.direction_y * travelled_y,
+                )
+            )
+        self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
         self.x, self.y, self.at = x, y, now
 
-        if self.reversals < REVERSALS or now < self.ready_at:
+        if self.turned < TURN_RADIANS or now < self.ready_at:
             return False
-        self.reversals = 0
+        self.turned = 0.0
         self.ready_at = now + COOLDOWN_SECONDS
         return True

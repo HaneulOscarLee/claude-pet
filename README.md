@@ -615,10 +615,14 @@ not put it. Run `claude-pet run` with `CLAUDE_PET_DEBUG=1` and it prints the
 speed of every release, if you want to argue with the number.
 
 **Calling it** is the petting gesture done from a distance: wave the pointer
-back and forth anywhere on screen — in any direction, including up and down —
-and the pet walks over, stopping short so it is not sitting on whatever you
-were about to click. Waving right beside the pet works too; only the sprite
-itself is excluded, since that is where stroking happens. A keyboard shortcut
+anywhere on screen — in any direction, or draw a small circle — and the pet
+walks over, across monitors if it has to, stopping short so it is not sitting
+on whatever you were about to click. Waving right beside the pet works too;
+only the sprite itself is excluded, since that is where stroking happens.
+
+It answers at once and then walks at its ordinary pace, which on a wide desk
+means it takes a while. That is the intent: a pet that crosses two monitors in
+a second is a cursor with a sprite on it. A keyboard shortcut
 would be the obvious way and is not available — global shortcuts need a
 desktop portal this Wayland session does not provide, and the window refuses
 focus on purpose so an always-on-top pet never swallows a keystroke. The

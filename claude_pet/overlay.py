@@ -269,14 +269,25 @@ EDGE_MARGIN = 12
 #: can hear them.
 CALL_POLL_MS = 50
 
+#: How often a pet in motion is moved, in milliseconds.
+#:
+#: Sixty times a second, and nothing to do with the animation frame. A
+#: throw covers hundreds of pixels a second, so advancing it once per
+#: animation frame moved it in forty-pixel jumps and looked like
+#: stuttering -- the sprite was fine, the position was not. Runs only while
+#: something is moving, so an idle pet is not waking the machine sixty
+#: times a second for nothing.
+MOTION_POLL_MS = 16
+
 #: How near the pointer counts as arrived. Standing under it would put the
 #: sprite between you and whatever you were about to click.
 CALL_ARRIVAL_PIXELS = 40
 
-#: How fast it comes, in pixels per second. A wander is a tenth of this;
-#: at that pace crossing a screen took twenty seconds, which reads as the
-#: pet ignoring you rather than answering.
-CALL_SPEED = 420.0
+# A summoned pet walks at the pace it wanders at, and no faster. Hurrying it
+# was tried and is not an improvement: a pet that crosses the desk in a
+# second and a half is a cursor with a sprite on it. What makes the delay
+# bearable is that it answers straight away -- see `come_here` -- so you know
+# it heard you and can get on with something while it walks over.
 
 #: Set CLAUDE_PET_DEBUG=1 to trace menu dismissal decisions. The signals here
 #: differ between X11 and Wayland surfaces and cannot be reasoned about from the
@@ -405,8 +416,16 @@ class Overlay(Gtk.Window):
         self.flick = motion.Flick()
         self.throw: motion.Throw | None = None
         self.thrown_at = 0.0
-        #: Sprite x to walk to, when called. None means wander as usual.
-        self.walk_target: int | None = None
+        #: Where to walk to when called, as a sprite position. None means
+        #: wander as usual.
+        self.walk_target: tuple[int, int] | None = None
+        self.motion_running = False
+        self.moved_at = 0.0
+        #: Where the walk has got to, kept as floats. At a wander's pace on
+        #: a sixty-hertz timer each step is half a pixel, and rounding that
+        #: to whole pixels per axis rounds it to nothing: the pet stood
+        #: still forever, having been told to move.
+        self.errand_at: tuple[float, float] | None = None
         self.petted_count = int(settings.get("petted_count") or 0)
         self.phrases_petted = resolve_petted(language)
 
@@ -543,7 +562,25 @@ class Overlay(Gtk.Window):
         self._apply_input_shape()
         self.queue_draw()
 
-    def _place_sprite(self, x: int, y: int) -> None:
+    def _span(self) -> tuple[int, int, int, int]:
+        """Everything the pet may occupy, across every screen.
+
+        Clamping to one monitor is right for wandering, which should stay
+        on the screen it is on, and wrong for anything crossing between
+        them. A pet walking left off the second monitor cannot get onto the
+        first: to count as being on the first its centre must pass the
+        seam, and the second monitor's own bounds forbid exactly that. It
+        sticks at the join, which looks like a summons being ignored.
+        """
+        areas = self._monitors()
+        return (
+            min(a.x for a in areas) + EDGE_MARGIN,
+            min(a.y for a in areas),
+            max(a.x + a.width for a in areas) - EDGE_MARGIN - self.view.width,
+            max(a.y + a.height for a in areas) - EDGE_MARGIN - self.view.height,
+        )
+
+    def _place_sprite(self, x: int, y: int, across_screens: bool = False) -> None:
         """Put the *sprite* here, and work out where the window has to go.
 
         The window is taller than the sprite because the bubble needs somewhere
@@ -554,8 +591,13 @@ class Overlay(Gtk.Window):
         the sprite reaches the top of the screen.
         """
         area = self._workarea_for_sprite(x, y)
-        x = min(max(x, area.x), area.x + area.width - self.view.width)
-        y = min(max(y, area.y), area.y + area.height - self.view.height)
+        if across_screens:
+            left, top, right, bottom = self._span()
+            x = min(max(x, left), right)
+            y = min(max(y, top), bottom)
+        else:
+            x = min(max(x, area.x), area.x + area.width - self.view.width)
+            y = min(max(y, area.y), area.y + area.height - self.view.height)
 
         self._set_bubble_side(y - area.y < self.bubble_space)
         self.pos_x = x - self.sprite_left
@@ -1011,10 +1053,8 @@ class Overlay(Gtk.Window):
         # A throw and an errand outrank wandering, and unlike wandering they
         # happen whatever the agents are doing: being called is a thing you
         # asked for, and it would be odd to be ignored because Claude is busy.
-        if self.throw is not None:
-            self._advance_throw(now)
-        elif self.walk_target is not None:
-            self._advance_errand()
+        if self.throw is not None or self.walk_target is not None:
+            pass  # its own timer moves it; this frame only animates
         elif self.state == "idle" and self.visual_until is None:
             self._update_walk(now)
         elif self.walking:
@@ -1067,20 +1107,35 @@ class Overlay(Gtk.Window):
 
     # -------------------------------------------------------- throw and call
 
+    def _start_motion(self) -> None:
+        """Begin moving the pet on its own clock, if it is not already."""
+        if self.motion_running:
+            return
+        self.motion_running = True
+        self.moved_at = time.monotonic()
+        GLib.timeout_add(MOTION_POLL_MS, self._advance_motion)
+
+    def _advance_motion(self) -> bool:
+        now = time.monotonic()
+        elapsed = max(0.001, min(0.2, now - self.moved_at))
+        self.moved_at = now
+        if self.throw is not None:
+            self._advance_throw(now)
+        elif self.walk_target is not None:
+            self._advance_errand(elapsed)
+        else:
+            self.motion_running = False
+            return False
+        return True
+
     def _advance_throw(self, now: float) -> None:
         """Carry a thrown pet along until it runs out of speed."""
-        area = self._workarea()
-        bounds = (
-            area.x + EDGE_MARGIN,
-            area.y,
-            area.x + area.width - EDGE_MARGIN - self.view.width,
-            area.y + area.height - EDGE_MARGIN - self.view.height,
-        )
+        bounds = self._span()
         elapsed = max(0.001, min(0.2, now - self.thrown_at))
         self.thrown_at = now
 
         x, y = self.throw.step(self.sprite_x, self.sprite_y, bounds, elapsed)
-        self._place_sprite(int(round(x)), int(round(y)))
+        self._place_sprite(int(round(x)), int(round(y)), across_screens=True)
 
         if self.throw.moving:
             # `jumping` reads as airborne; the walking rows would look like it
@@ -1095,18 +1150,20 @@ class Overlay(Gtk.Window):
         config.update(position=self.settings["position"])
         self._halt_walk(pause=1.0)
 
-    def _advance_errand(self) -> None:
+    def _advance_errand(self, elapsed: float = 0.1) -> None:
         """Walk toward wherever it was called to, then stop just short."""
-        target = self.walk_target
-        area = self._workarea()
-        target = min(max(int(target), area.x + EDGE_MARGIN),
-                     area.x + area.width - EDGE_MARGIN - self.view.width)
-        remaining = target - self.sprite_x
+        left, top, right, bottom = self._span()
+        target_x = min(max(int(self.walk_target[0]), left), right)
+        target_y = min(max(int(self.walk_target[1]), top), bottom)
+        remaining_x = target_x - self.sprite_x
+        remaining_y = target_y - self.sprite_y
+        distance = math.hypot(remaining_x, remaining_y)
 
         # Stopping short: standing under the pointer would put the sprite
         # between you and whatever you were about to click.
-        if abs(remaining) <= max(self.view.width, CALL_ARRIVAL_PIXELS):
+        if distance <= max(self.view.width, CALL_ARRIVAL_PIXELS):
             self.walk_target = None
+            self.errand_at = None
             self.walking = 0
             self.visual_state = "idle"
             self.frame_index = 0
@@ -1115,15 +1172,27 @@ class Overlay(Gtk.Window):
             config.update(position=self.settings["position"])
             return
 
-        direction = 1 if remaining > 0 else -1
-        # Deliberately quicker than a wander, and in pixels per second so
-        # that the animation rate -- a user setting -- does not decide how
-        # fast the pet answers.
-        fps = max(1, int(self.settings.get("fps") or 10))
-        step = max(1, int(CALL_SPEED / fps))
+        # Straight at you, not along one axis: the pointer is somewhere on a
+        # screen, not somewhere on a line, and a pet that only ever slides
+        # sideways is answering half the summons.
+        direction = 1 if remaining_x >= 0 else -1
+        # The wander's own pace, in pixels per second, so that walking to you
+        # and walking about look like the same animal. Expressed as a rate
+        # because this runs on its own timer rather than the animation frame.
+        speed = max(1, int(self.settings.get("walk_speed") or 3)) * max(
+            1, int(self.settings.get("fps") or 10)
+        )
+        step = speed * elapsed
         self.walking = direction
+        # Only left and right exist as poses, so the horizontal part of the
+        # journey picks which one; a pack has nothing for walking upwards.
         self.visual_state = "running-right" if direction > 0 else "running-left"
-        self._place_sprite(self.sprite_x + step * direction, self.sprite_y)
+        if self.errand_at is None:
+            self.errand_at = (float(self.sprite_x), float(self.sprite_y))
+        moved_x = self.errand_at[0] + step * remaining_x / distance
+        moved_y = self.errand_at[1] + step * remaining_y / distance
+        self.errand_at = (moved_x, moved_y)
+        self._place_sprite(int(round(moved_x)), int(round(moved_y)), across_screens=True)
 
     def _pointer_position(self) -> tuple[int, int] | None:
         display = Gdk.Display.get_default()
@@ -1172,19 +1241,28 @@ class Overlay(Gtk.Window):
             return True
 
         if self.call_stroke.feed(x, now, y):
-            self.come_here(x)
+            self.come_here(x, y)
         return True
 
-    def come_here(self, x: int | None = None) -> None:
-        """Send the pet to the pointer, or to a given x."""
-        if x is None:
+    def come_here(self, x: int | None = None, y: int | None = None) -> None:
+        """Send the pet to the pointer, or to a given place."""
+        if x is None or y is None:
             position = self._pointer_position()
             if position is None:
                 return
-            x = position[0]
+            x, y = position
         self.throw = None
-        self.walk_target = int(x) - self.view.width // 2
+        self.walk_target = (
+            int(x) - self.view.width // 2,
+            int(y) - self.view.height // 2,
+        )
+        self.errand_at = None
         self.called_at = time.monotonic()
+        # Answer before setting off. Crossing a wide desk takes a moment
+        # even at speed, and a gesture with no acknowledgement for a second
+        # and a half is one you assume did not work.
+        self._react("waving")
+        self._start_motion()
         trace(f"called to x={x}")
 
     def _update_look(self) -> None:
@@ -1334,6 +1412,11 @@ class Overlay(Gtk.Window):
             # actually travelled, so a plain click stays available for jumping.
             self._halt_walk()
             self.press_origin = (int(event.x_root), int(event.y_root))
+            # Reaching for the pet is not a summons. Without this, the
+            # movement of going to grab it can finish a gesture, and the
+            # call cancels the throw you were about to make.
+            self.call_stroke.reset()
+            self.walk_target = None
             return True
         return False
 
@@ -1419,6 +1502,7 @@ class Overlay(Gtk.Window):
             self.throw = thrown
             self.thrown_at = time.monotonic()
             self.walk_target = None
+            self._start_motion()
             return  # position is saved where it lands, not where it left
         # Stored as the window corner, which is what earlier versions wrote and
         # what `_place_initial` still reads.
