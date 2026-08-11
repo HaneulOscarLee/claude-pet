@@ -126,6 +126,25 @@ def checks() -> list[tuple[str, bool]]:
                     abs(window.call_stroke.roundness_wanted
                         - window.settings["call_roundness"]) < 0.01))
 
+    # Where the popup lands, for every page and wherever the pet is. Placement
+    # measured the window rather than its contents, and a page just swapped in
+    # has not been sized yet -- `get_size()` answered 190x417 for all of them,
+    # including the tuning page that wants 244x477. Seventy-seven pixels short
+    # put it through the panel whenever the pet was near the top, which is how
+    # it was reported.
+    area = window._workarea()
+    for where, y in (("top", area.y), ("middle", area.y + area.height // 2),
+                     ("bottom", area.y + area.height - window.view.height)):
+        window._place_sprite(area.x + 400, y)
+        for page in ("main", "pets", "behaviour", "tuning"):
+            window._render_page(popup, page)
+            _minimum, natural = popup.get_preferred_size()
+            left, top = popup.get_position()
+            inside = (area.y <= top and top + natural.height <= area.y + area.height
+                      and area.x <= left and left + natural.width <= area.x + area.width)
+            results.append((f"the {page} menu fits with the pet at the {where}"
+                            f" ({natural.width}x{natural.height} at {top})", inside))
+
     window._reset_tuning(popup)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]

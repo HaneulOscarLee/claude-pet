@@ -2310,8 +2310,18 @@ class Overlay(Gtk.Window):
             self._flash(f"could not open {url}")
 
     def _place_menu(self, popup: Gtk.Window, event) -> None:
-        """Put the popup above the pet, kept inside the work area."""
-        width, height = popup.get_size()
+        """Put the popup above the pet, kept inside the work area.
+
+        Measured by what the contents ask for, not by what the window
+        currently is. `get_size()` reports the size it has been given, and a
+        page that has just been swapped in has not been given one yet -- it
+        answered 190x417 for every page, including the tuning page that
+        actually wants 244x477. Placing a window 77 pixels shorter than it is
+        put it through the panel whenever the pet was near the top of the
+        screen, which is how it was reported.
+        """
+        _minimum, natural = popup.get_preferred_size()
+        width, height = natural.width, natural.height
         area = self._workarea()
         if event is None and getattr(popup, "menu_x", None) is not None:
             # A page change, not a fresh right-click. Re-centring on the pointer
