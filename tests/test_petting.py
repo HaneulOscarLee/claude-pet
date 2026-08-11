@@ -112,9 +112,17 @@ def summons() -> list[tuple[str, bool]]:
 
     results = [("a summons asks less than a rub",
                 petting.CALL_TURN_RADIANS < petting.TURN_RADIANS)]
-    # Small, medium and large, each at a speed someone would actually draw it.
-    for radius, speed in ((60, 400), (100, 600), (250, 1200), (400, 2000)):
-        results.append((f"a circle of radius {radius} is a summons", circle(radius, speed)))
+    # Quick ones, at the pace the rule asks for.
+    for radius, speed in ((45, 700), (60, 900), (100, 1500), (150, 2200)):
+        results.append((f"a circle of radius {radius} drawn quickly is a summons",
+                        circle(radius, speed)))
+
+    # And the consequence, stated rather than left to be discovered: a big
+    # circle cannot be carried round fast enough by hand, so it is no longer
+    # a summons however well drawn. That is the rule working, not failing.
+    for radius, speed in ((250, 1200), (400, 2000)):
+        results.append((f"a radius {radius} circle at hand speed is too slow now",
+                        not circle(radius, speed)))
     # A rub is still a rub: the stricter threshold is the default.
     results.append(("the default is still the stricter one",
                     petting.Stroke().turn_radians == petting.TURN_RADIANS))
@@ -124,18 +132,18 @@ def summons() -> list[tuple[str, bool]]:
     # pet came for gestures far smaller than anyone meant to make.
     for radius in (10, 20, 30):
         results.append((f"a circle only {2 * radius}px across is not a summons",
-                        not circle(radius, 400)))
-    results.append(("...but a coin-sized one is", circle(45, 400)))
+                        not circle(radius, 700)))
+    results.append(("...but a coin-sized one is", circle(45, 700)))
 
     # Size was measured across the widest part alone, so a long thin loop
     # counted as a circle -- and reported as such: shapes nobody would call
     # round were summoning the pet.
-    def ellipse(across: int, down: int, seconds: float = 3.0) -> bool:
+    def ellipse(across: int, down: int, seconds: float = 2.0) -> bool:
         stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
                                 one_way=True, seconds=petting.CALL_SECONDS)
         moment = 0.0
         while moment < seconds:
-            angle = 2 * math.pi * moment  # one revolution a second
+            angle = 2 * math.pi * moment / 0.35  # a quick flick of a loop
             if stroke.feed(int(700 + across * math.cos(angle) / 2), moment,
                            int(500 + down * math.sin(angle) / 2)):
                 return True
@@ -167,13 +175,13 @@ def summons() -> list[tuple[str, bool]]:
             moment += 0.05
         return False
 
-    for pace in (0.6, 0.9):
+    for pace in (0.25, 0.4):
         results.append((f"a circle drawn in {pace}s is a summons", paced(pace)))
-    for pace in (2.5, 4.0, 6.0):
-        results.append((f"one dawdled over {pace}s is not", not paced(pace)))
+    for pace in (0.8, 1.5, 3.0):
+        results.append((f"one taking {pace}s is not", not paced(pace)))
     # Going round and round slowly must not add up to one either, which is
     # what a limit on the gap between samples alone would have allowed.
-    results.append(("...however long it keeps going", not paced(3.0, watch=30.0)))
+    results.append(("...however long it keeps going", not paced(1.5, watch=30.0)))
     results.append(("a rub is not put on the clock", petting.Stroke().seconds == 0.0))
 
     # Stroking asks for no minimum size: it happens on a sprite barely a

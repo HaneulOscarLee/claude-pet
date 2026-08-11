@@ -65,7 +65,14 @@ CALL_ROUNDNESS = 0.6
 #: a quick one did -- and the pointer wanders round the screen slowly all
 #: day. Drawing a circle *deliberately* is a quick thing; this is what
 #: separates it from having merely gone that way eventually.
-CALL_SECONDS = 1.2
+#:
+#: The threshold is four fifths of a turn, so this works out at half a
+#: second for the full circle. Set at a second and a half first and reported
+#: as far too loose. It follows that a large circle is no longer a summons
+#: at all -- a hand cannot carry a 400px radius round in half a second --
+#: which is the intended shape of the rule, not a side effect of it: what is
+#: being asked for is a quick flick of a circle, not a slow sweep.
+CALL_SECONDS = 0.4
 
 #: Reversals only belong to the same gesture within this long of each other.
 WINDOW_SECONDS = 1.6
