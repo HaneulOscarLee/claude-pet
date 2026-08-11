@@ -53,10 +53,19 @@ CALL_SPAN_PIXELS = 90
 #: fraction of the longer.
 #:
 #: Size alone was measured across the widest part, so a long thin loop --
-#: or a squiggle that happened to double back -- counted as a circle. A
-#: hand-drawn circle is never perfect, so this is generous; it only rules
-#: out shapes nobody would call round.
-CALL_ROUNDNESS = 0.45
+#: or a squiggle that happened to double back -- counted as a circle.
+#: Nobody draws a true circle freehand, so there is room here, but not much:
+#: at three fifths a 300x180 oval still counts and a 300x150 one does not.
+CALL_ROUNDNESS = 0.6
+
+#: How long the whole gesture may take, from the first turn to the last.
+#:
+#: There was no limit at all, only a limit on the gap between samples, so a
+#: circle drawn at a leisurely pace over several seconds counted exactly as
+#: a quick one did -- and the pointer wanders round the screen slowly all
+#: day. Drawing a circle *deliberately* is a quick thing; this is what
+#: separates it from having merely gone that way eventually.
+CALL_SECONDS = 1.2
 
 #: Reversals only belong to the same gesture within this long of each other.
 WINDOW_SECONDS = 1.6
@@ -77,6 +86,7 @@ class Stroke:
         turn_radians: float = TURN_RADIANS,
         span_pixels: int = 0,
         one_way: bool = False,
+        seconds: float = 0.0,
     ) -> None:
         #: Stroking and summoning want different amounts of it. A rub gives
         #: half a turn per sweep and happens on a sprite barely a hundred
@@ -97,6 +107,15 @@ class Stroke:
         #: separates them exactly: two loops of a circle come to +3.9pi,
         #: the same length of wave to 0.
         self.one_way = one_way
+        #: How long the whole gesture may take; 0 for no limit.
+        #:
+        #: A rub needs none -- it happens on the sprite, where nothing else
+        #: is going on. A summons is drawn out in the open, where the
+        #: pointer travels all day, and without this the only thing
+        #: separating "drew a circle" from "went round eventually" was that
+        #: no single pause exceeded the sample window.
+        self.seconds = seconds
+        self.began = 0.0
         self.low_x = self.high_x = 0
         self.low_y = self.high_y = 0
         self.x: int | None = None
@@ -111,6 +130,7 @@ class Stroke:
     def reset(self) -> None:
         """Forget the gesture in progress, when the pointer leaves or drags."""
         self.x = None
+        self.began = 0.0
         self.direction_x = 0.0
         self.direction_y = 0.0
         self.turned = self.turned_signed = 0.0
@@ -127,6 +147,7 @@ class Stroke:
         """
         if self.x is None:
             self.x, self.y, self.at = x, y, now
+            self.began = now
             self.low_x = self.high_x = x
             self.low_y = self.high_y = y
             return False
@@ -139,10 +160,17 @@ class Stroke:
             # accumulate enough travel to register at all.
             return False
 
-        if now - self.at > WINDOW_SECONDS:
-            self.turned = self.turned_signed = 0.0  # whatever came before was a different gesture
+        too_slow = bool(self.seconds) and now - self.began > self.seconds
+        if now - self.at > WINDOW_SECONDS or too_slow:
+            # Whatever came before was a different gesture -- either too long
+            # ago to belong to this one, or too long in the drawing to have
+            # been one. Start again from here rather than discarding the
+            # sample: the circle someone is drawing right now may well be the
+            # deliberate one.
+            self.turned = self.turned_signed = 0.0
             self.low_x = self.high_x = x
             self.low_y = self.high_y = y
+            self.began = now
         self.low_x, self.high_x = min(self.low_x, x), max(self.high_x, x)
         self.low_y, self.high_y = min(self.low_y, y), max(self.high_y, y)
         if self.direction_x or self.direction_y:
@@ -180,5 +208,6 @@ class Stroke:
         self.turned = self.turned_signed = 0.0
         self.low_x = self.high_x = x
         self.low_y = self.high_y = y
+        self.began = now
         self.ready_at = now + COOLDOWN_SECONDS
         return True

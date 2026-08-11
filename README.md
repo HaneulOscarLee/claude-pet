@@ -619,8 +619,13 @@ anywhere on screen — draw a circle, about the size of a coin or larger — and
 the pet walks over, across monitors if it has to, stopping short so it is not sitting
 on whatever you were about to click. Waving right beside the pet works too;
 only the sprite itself is excluded, since that is where stroking happens.
-It has to be roughly round: a long thin loop is not a circle, and counting
-one meant a squiggle that happened to double back summoned the pet.
+It has to be roughly round and it has to be quick — under about a second and
+a half for the full turn. Neither was asked for at first, and both had to be:
+a long thin loop is not a circle, so a squiggle that happened to double back
+summoned the pet, and with no limit on the pace a pointer that went round the
+screen slowly over several seconds counted exactly as a deliberate circle
+did. Drawing one on purpose is a quick, round thing; that is the whole of
+what these two rules say.
 
 It waves the moment it hears you and says **coming** for as long as the walk
 takes, which on a wide desk is a while — it goes a little brisker than it
