@@ -751,6 +751,43 @@ def cmd_fix_terminal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix_pointer(args: argparse.Namespace) -> int:
+    from . import pointer as pointer_visibility
+    from . import shellext
+
+    if args.undo:
+        print("removed; log out and back in" if shellext.uninstall() else "nothing to remove")
+        return 0
+
+    if pointer_visibility.bridge_present():
+        print("already working: the shell answers where the pointer is")
+        return 0
+
+    if not shellext.supported_here():
+        session = os.environ.get("XDG_SESSION_TYPE", "?")
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "?")
+        print(f"not needed: this is {desktop} on {session}, "
+              "and the pointer can already be read anywhere")
+        return 0
+
+    if shellext.source_path() is None:
+        print("cannot find the extension to install; is this a complete install?")
+        return 1
+
+    if not shellext.install():
+        print("could not install it")
+        return 1
+
+    print(f"installed {shellext.UUID} and switched it on.")
+    print()
+    print("  Log out and back in to finish. GNOME reads its extensions once, at")
+    print("  startup, so a new one cannot be loaded into a running session.")
+    print()
+    print("  After that the pet can be called from anywhere on screen, including")
+    print("  over Wayland-native windows. Undo with `claude-pet fix-pointer --undo`.")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     from . import sprites
 
@@ -793,7 +830,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     warning = pointer_visibility.explain()
     if warning:
-        optional("pointer visible to X11", pointer_visibility.visible(), warning)
+        todo("calling works anywhere", False, "claude-pet fix-pointer", warning)
+    elif session == "wayland":
+        optional("calling works anywhere", True, "the shell bridge is answering")
 
     try:
         from PIL import features
@@ -1375,6 +1414,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--check", action="store_true", help="only report whether an update is available"
     )
     update_parser.set_defaults(func=cmd_update)
+
+    fix_pointer = subparsers.add_parser(
+        "fix-pointer",
+        help="install the GNOME extension that lets the pet be called from anywhere",
+    )
+    fix_pointer.add_argument("--undo", action="store_true", help="remove the extension again")
+    fix_pointer.set_defaults(func=cmd_fix_pointer)
 
     fix_terminal = subparsers.add_parser(
         "fix-terminal", help="run your terminal under XWayland so clicks can raise it"

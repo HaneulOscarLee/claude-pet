@@ -660,20 +660,38 @@ It also explains a pet that seems to stop at the join between two monitors:
 the pointer crossed onto a screen X11 cannot see, so the last position it had
 was the one at the seam.
 
-There is no fix from inside the process. GNOME 46 has no portal for reading
-the pointer, `org.gnome.Shell.Eval` is locked, and the remaining route — a
+Nothing inside the process can fix it. GNOME 46 has no portal for reading the
+pointer, `org.gnome.Shell.Eval` is locked, and the remaining route — a
 screencast session for its cursor metadata — means a permission dialog and a
-screen-sharing indicator for the lifetime of a desktop pet. What the pet does
-instead is know: it asks X11 who is under the pointer, and stops treating the
-position as current when the answer is nobody, rather than walking to a place
-the pointer has left. `claude-pet doctor` reports which it is right now.
+screen-sharing indicator for the lifetime of a desktop pet.
 
-Three ways round it, in the order most people will want them:
+The compositor, though, never lost track. The difficulty was only that
+nothing would say. So:
+
+```
+claude-pet fix-pointer      # then log out and back in
+```
+
+installs a GNOME Shell extension of one method, which answers
+`global.get_pointer()` on the shell's own bus name. After that the pet can be
+called from anywhere on screen. It watches nothing, owns no bus name of its
+own, and comes off again with `claude-pet fix-pointer --undo`. The log out is
+not optional: GNOME reads its extensions once, at startup, and enabling an
+unknown one at runtime does nothing at all — measured, no reaction and no log
+line.
+
+The pet asks X11 first and only falls back to the bridge when X11 has lost
+sight, so in the ordinary case the compositor is not asked at all. Without the
+bridge it still knows when not to believe what it is told, and walks nowhere
+rather than to a position that stopped moving. `claude-pet doctor` reports
+which of these is in force.
+
+If you would rather not install an extension:
 
 - Draw the circle over a window that runs under XWayland — a terminal, or
   anything started with `GDK_BACKEND=x11`.
-- Run the browser under X11: `--ozone-platform=x11` for Chrome and
-  Chromium, `MOZ_ENABLE_WAYLAND=0` for Firefox.
+- Run the browser under X11: `--ozone-platform=x11` for Chrome, Chromium and
+  Whale, `MOZ_ENABLE_WAYLAND=0` for Firefox.
 - Use **Come here** in the right-click menu, which never needs the gesture.
 
 On an X11 session none of this applies and a circle works anywhere.

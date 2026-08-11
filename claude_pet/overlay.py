@@ -1271,9 +1271,7 @@ class Overlay(Gtk.Window):
         described, the pet behaving as though the pointer had stopped where
         it crossed between screens.
         """
-        if not pointer_visibility.visible():
-            return None
-        return self._pointer_position()
+        return pointer_visibility.trusted_position(self._pointer_position)
 
     def _listen_for_a_call(self) -> bool:
         """Watch the pointer, anywhere on screen, for being waved at.

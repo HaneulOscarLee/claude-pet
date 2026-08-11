@@ -21,22 +21,31 @@ on by a terminal running under XWayland. So a summons drawn over the
 terminal was recognised and the same circle drawn over the browser did
 nothing whatever, which is not a thing anyone would guess.
 
-There is no fix from inside the process. GNOME 46 has no portal for reading
-the pointer (GlobalShortcuts arrived later), `org.gnome.Shell.Eval` is
-locked, and the remaining route -- a screencast session for its cursor
-metadata -- means a permission dialog and a screen-sharing indicator for the
-lifetime of a desktop pet, which is not a trade worth making.
+Nothing inside the process can fix it. GNOME 46 has no portal for reading the
+pointer (GlobalShortcuts arrived later), `org.gnome.Shell.Eval` is locked,
+and the remaining route -- a screencast session for its cursor metadata --
+means a permission dialog and a screen-sharing indicator for the lifetime of
+a desktop pet, which is not a trade worth making.
 
-What can be done is to know. X11 says so plainly: asked who is under the
-pointer it names a window while it is keeping up, and answers nobody once it
-is not. That is enough to stop reading stale coordinates as though they were
-a gesture, and enough for `doctor` to explain the silence.
+So there are two answers here, and the pet uses both.
+
+Knowing. X11 says plainly whether it is still being told: asked who is under
+the pointer it names a window while it is keeping up, and answers nobody once
+it is not. That alone stops stale coordinates being read as a gesture, or
+walked to as though the pointer were still there.
+
+Asking someone who knows. The compositor never lost track -- the difficulty
+was only that nothing would say. A GNOME Shell extension of one method
+(`shellext.py`) exports `global.get_pointer()`, and when it is installed the
+pet is callable from anywhere on screen. Only consulted when X11 has lost
+sight, so the shell does no work in the ordinary case.
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import time
 
 #: Cached so the poll does not reopen a display connection every 50ms, and so
 #: that a machine without libX11 pays for the failure once.
@@ -126,15 +135,87 @@ def visible() -> bool:
     return True if child is None else child != 0
 
 
+#: Set once the shell bridge has been asked and found missing, so a poll that
+#: runs while the pointer is somewhere X11 cannot see does not make a D-Bus
+#: round trip every 50ms to be told the same thing.
+_bridge: object | None = None
+_bridge_missing_at: float | None = None
+
+#: ...but not forever. A single timeout while the shell was busy would
+#: otherwise cost the bridge for the rest of the session, and a pet that
+#: quietly stops answering is the fault this whole module exists to avoid.
+BRIDGE_RETRY_SECONDS = 30.0
+
+BRIDGE_PATH = "/org/gnome/Shell/Extensions/ClaudePetPointer"
+BRIDGE_IFACE = "org.gnome.Shell.Extensions.ClaudePetPointer"
+
+
+def from_shell() -> tuple[int, int] | None:
+    """Ask the compositor directly, through the extension, if it is there.
+
+    The compositor always knows where the pointer is; the difficulty was
+    only ever that nothing would say. Asked for rather than watched, so the
+    shell does no work unless the pet needs an answer -- and it only needs
+    one when X11 has lost sight, which is why this is not the first thing
+    tried.
+    """
+    global _bridge, _bridge_missing_at
+    if _bridge_missing_at is not None:
+        if time.monotonic() - _bridge_missing_at < BRIDGE_RETRY_SECONDS:
+            return None
+        _bridge_missing_at = None
+    try:
+        from gi.repository import Gio
+
+        if _bridge is None:
+            _bridge = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SESSION, Gio.DBusProxyFlags.DO_NOT_AUTO_START,
+                None, "org.gnome.Shell", BRIDGE_PATH, BRIDGE_IFACE, None,
+            )
+        reply = _bridge.call_sync("GetPointer", None, Gio.DBusCallFlags.NONE, 200, None)
+    except Exception:  # noqa: BLE001 -- absent, refusing, or no gi at all
+        _bridge_missing_at = time.monotonic()
+        _bridge = None
+        return None
+    try:
+        x, y = reply.unpack()
+    except (ValueError, TypeError):
+        _bridge_missing_at = time.monotonic()
+        return None
+    return int(x), int(y)
+
+
+def bridge_present() -> bool:
+    """Whether the shell answers, checked afresh rather than from the cache."""
+    global _bridge, _bridge_missing_at
+    _bridge, _bridge_missing_at = None, None
+    return from_shell() is not None
+
+
+def trusted_position(raw) -> tuple[int, int] | None:
+    """Where the pointer is, or None when nobody can say.
+
+    X11 first, because when it is keeping up it is free and exact, and
+    asking the shell twenty times a second for something already to hand is
+    work the compositor should not be doing. The bridge is for the case X11
+    cannot cover, which is the only case it was installed for.
+    """
+    if visible():
+        return raw()
+    return from_shell()
+
+
 def explain() -> str | None:
     """One line for `doctor`, or None when there is nothing to warn about."""
     if not under_wayland():
+        return None
+    if bridge_present():
         return None
     if _query_child() is None:
         return "cannot ask X11 where the pointer is; calling may not work"
     where = "over a window it can see" if visible() else "over a Wayland window, invisible to it"
     return (
-        f"the pointer is {where}. On Wayland the pet can only be called from "
-        f"over an X11/XWayland window -- a circle drawn over a Wayland-native "
-        f"one is never seen."
+        f"the pointer is {where}. Without the shell bridge the pet can only be "
+        f"called from over an X11/XWayland window; run `claude-pet fix-pointer` "
+        f"to install it, then log out and back in."
     )

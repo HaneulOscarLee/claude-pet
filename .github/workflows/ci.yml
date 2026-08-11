@@ -50,9 +50,14 @@ jobs:
         run: python3 tests/test_geometry.py
 
       # Whether the pointer's position is worth believing, which on Wayland
-      # it often is not.
+      # it often is not, and who to ask instead.
       - name: Pointer visibility tests
         run: python3 tests/test_pointer.py
+
+      # The shell extension has to be something GNOME would actually load,
+      # and has to come off again cleanly.
+      - name: Shell extension tests
+        run: python3 tests/test_shellext.py
 
       # Telling a stroke apart from a pointer merely crossing the sprite.
       - name: Petting tests

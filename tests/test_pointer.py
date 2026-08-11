@@ -22,19 +22,25 @@ from claude_pet import pointer  # noqa: E402
 class Session:
     """Run a check as though on a given session type, with a given answer."""
 
-    def __init__(self, session_type: str, child: int | None) -> None:
+    def __init__(self, session_type: str, child: int | None,
+                 shell: tuple[int, int] | None = None) -> None:
         self.session_type = session_type
         self.child = child
+        #: What the shell bridge answers, or None when it is not installed.
+        self.shell = shell
 
     def __enter__(self):
         self.was = os.environ.get("XDG_SESSION_TYPE")
         self.real_query = pointer._query_child
+        self.real_shell = pointer.from_shell
         os.environ["XDG_SESSION_TYPE"] = self.session_type
         pointer._query_child = lambda: self.child
+        pointer.from_shell = lambda: self.shell
         return self
 
     def __exit__(self, *_exc) -> None:
         pointer._query_child = self.real_query
+        pointer.from_shell = self.real_shell
         if self.was is None:
             os.environ.pop("XDG_SESSION_TYPE", None)
         else:
@@ -86,10 +92,44 @@ def x11_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def fallback_checks() -> list[tuple[str, bool]]:
+    """Which source answers, and what happens when neither can.
+
+    X11 first when it is keeping up: it is free, and asking the compositor
+    twenty times a second for something already to hand is work it should
+    not be doing. The bridge only for the case X11 cannot cover.
+    """
+    results = []
+    x11_says = (100, 200)
+
+    def raw():
+        return x11_says
+
+    with Session("wayland", 8400340, shell=(900, 900)):
+        results.append(("while X11 keeps up, X11 answers",
+                        pointer.trusted_position(raw) == x11_says))
+    with Session("wayland", 0, shell=(900, 900)):
+        results.append(("once it cannot, the shell answers",
+                        pointer.trusted_position(raw) == (900, 900)))
+        results.append(("...and doctor stops warning", pointer.explain() is None))
+    with Session("wayland", 0, shell=None):
+        results.append(("with neither, nobody answers",
+                        pointer.trusted_position(raw) is None))
+        results.append(("...which is not the frozen position",
+                        pointer.trusted_position(raw) != x11_says))
+
+    # On X11 the bridge is never consulted, installed or not.
+    with Session("x11", 0, shell=(900, 900)):
+        results.append(("on X11 the bridge is not consulted",
+                        pointer.trusted_position(raw) == x11_says))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("wayland", wayland_checks()), ("x11", x11_checks())):
+    for label, results in (("wayland", wayland_checks()), ("x11", x11_checks()),
+                            ("fallback", fallback_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

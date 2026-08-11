@@ -1,0 +1,7 @@
+{
+  "uuid": "claude-pet-pointer@claude-pet.local",
+  "name": "claude-pet pointer bridge",
+  "description": "Answers where the pointer is. XWayland cannot once the pointer is over a Wayland-native window, which is why a summons drawn over a browser is never seen. Exports one method on the shell's own bus name, watches nothing, and owns no name of its own.",
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/HaneulOscarLee/claude-pet"
+}
