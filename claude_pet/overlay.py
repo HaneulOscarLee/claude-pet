@@ -32,6 +32,7 @@ for _namespace, _version in (
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 from . import config, desktop, jump, motion, petting, sprites, state, tray  # noqa: E402
+from . import pointer as pointer_visibility  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
@@ -1152,7 +1153,7 @@ class Overlay(Gtk.Window):
             # Aim at where the pointer is now, not where it was when called.
             # You move on while it walks, and a pet arriving at the place
             # you used to be has answered a question nobody asked.
-            here = self._pointer_position()
+            here = self._trusted_pointer_position()
             if here is not None:
                 if self.pointer_was is not None:
                     self.pointer_settled = (
@@ -1259,6 +1260,21 @@ class Overlay(Gtk.Window):
         _screen, x, y = pointer.get_position()
         return int(x), int(y)
 
+    def _trusted_pointer_position(self) -> tuple[int, int] | None:
+        """The pointer, but only when X11 still knows where it is.
+
+        On Wayland it stops being told once the pointer moves onto a
+        Wayland-native window, and reports the place it was last seen
+        instead. Read as a gesture that is a stream of identical samples,
+        which is harmless; read as somewhere to walk to, it is a pet
+        marching to a spot the pointer left -- which is exactly how this was
+        described, the pet behaving as though the pointer had stopped where
+        it crossed between screens.
+        """
+        if not pointer_visibility.visible():
+            return None
+        return self._pointer_position()
+
     def _listen_for_a_call(self) -> bool:
         """Watch the pointer, anywhere on screen, for being waved at.
 
@@ -1280,8 +1296,12 @@ class Overlay(Gtk.Window):
             return True
 
         now = time.monotonic()
-        position = self._pointer_position()
+        position = self._trusted_pointer_position()
         if position is None:
+            # Over a window X11 cannot see. Whatever was part-drawn is lost,
+            # which is better than finishing it with coordinates that have
+            # stopped moving.
+            self.call_stroke.reset()
             return True
         x, y = position
 

@@ -783,6 +783,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     check("DISPLAY (X11/XWayland)", bool(display), display or "unset: the overlay cannot start")
     print(f"  INFO  session type: {session}" + (" (via XWayland)" if session == "wayland" else ""))
 
+    # Reported as the pet ignoring a summons drawn over a browser while
+    # answering the same circle drawn over a terminal. Nothing was wrong with
+    # the gesture: X11 is told where the pointer is only while it is over one
+    # of its own windows, so over a Wayland-native one the position freezes
+    # and no gesture can form. Worth saying out loud, because there is no
+    # sign of it otherwise.
+    from . import pointer as pointer_visibility
+
+    warning = pointer_visibility.explain()
+    if warning:
+        optional("pointer visible to X11", pointer_visibility.visible(), warning)
+
     try:
         from PIL import features
 

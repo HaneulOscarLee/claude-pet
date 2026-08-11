@@ -619,6 +619,8 @@ anywhere on screen — draw a circle, about the size of a coin or larger — and
 the pet walks over, across monitors if it has to, stopping short so it is not sitting
 on whatever you were about to click. Waving right beside the pet works too;
 only the sprite itself is excluded, since that is where stroking happens.
+It has to be roughly round: a long thin loop is not a circle, and counting
+one meant a squiggle that happened to double back summoned the pet.
 
 It waves the moment it hears you and says **coming** for as long as the walk
 takes, which on a wide desk is a while — it goes a little brisker than it
@@ -632,9 +634,49 @@ Wandering stays along the ground, sideways only. Up and down is for being
 called — something you asked for, rather than something it does on its own. A keyboard shortcut
 would be the obvious way and is not available — global shortcuts need a
 desktop portal this Wayland session does not provide, and the window refuses
-focus on purpose so an always-on-top pet never swallows a keystroke. The
-pointer can be read wherever it is, which is already how a v2 pack knows
-where to look.
+focus on purpose so an always-on-top pet never swallows a keystroke.
+
+### Calling it on Wayland
+
+**On a Wayland session the pet can only be called from over an X11/XWayland
+window.** The overlay runs under XWayland because a Wayland-native window
+cannot be placed where you want it, kept above everything, and refused focus.
+The price is that XWayland is told where the pointer is only while it is over
+one of its own windows: move onto a Wayland-native one and the position stops
+updating, frozen where it left. So the same circle is recognised over a
+terminal and ignored over a browser, with nothing to say why.
+
+Measured by driving the real pointer through the compositor — an XTest warp
+goes through XWayland, so XWayland necessarily knows about it, which makes it
+useless for deciding this:
+
+| pointer moved to | X11 reports |
+| --- | --- |
+| 3167 → 2367, on the screen the terminal covered | keeps up exactly |
+| onto the screen the browser covered | frozen at 1967 |
+| back again | keeps up again |
+
+It also explains a pet that seems to stop at the join between two monitors:
+the pointer crossed onto a screen X11 cannot see, so the last position it had
+was the one at the seam.
+
+There is no fix from inside the process. GNOME 46 has no portal for reading
+the pointer, `org.gnome.Shell.Eval` is locked, and the remaining route — a
+screencast session for its cursor metadata — means a permission dialog and a
+screen-sharing indicator for the lifetime of a desktop pet. What the pet does
+instead is know: it asks X11 who is under the pointer, and stops treating the
+position as current when the answer is nobody, rather than walking to a place
+the pointer has left. `claude-pet doctor` reports which it is right now.
+
+Three ways round it, in the order most people will want them:
+
+- Draw the circle over a window that runs under XWayland — a terminal, or
+  anything started with `GDK_BACKEND=x11`.
+- Run the browser under X11: `--ozone-platform=x11` for Chrome and
+  Chromium, `MOZ_ENABLE_WAYLAND=0` for Firefox.
+- Use **Come here** in the right-click menu, which never needs the gesture.
+
+On an X11 session none of this applies and a circle works anywhere.
 
 The right-click menu covers day-to-day use on its own: switch pack, browse the
 gallery, install a pet (paste its id or just its gallery link), remove the

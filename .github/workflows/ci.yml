@@ -49,6 +49,11 @@ jobs:
       - name: Geometry tests
         run: python3 tests/test_geometry.py
 
+      # Whether the pointer's position is worth believing, which on Wayland
+      # it often is not.
+      - name: Pointer visibility tests
+        run: python3 tests/test_pointer.py
+
       # Telling a stroke apart from a pointer merely crossing the sprite.
       - name: Petting tests
         run: python3 tests/test_petting.py
