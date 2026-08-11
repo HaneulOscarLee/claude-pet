@@ -51,9 +51,13 @@ def checks() -> list[tuple[str, bool]]:
     window.walk_until = 1e18
     window.visual_state = "running-right"
     before = window.sprite_x
+    height_before = window.sprite_y
     for step in range(30):
         window._update_walk(step * 0.1)
     results.append(("it wanders without falling over", window.sprite_x != before))
+    # Wandering is sideways only. Up and down is for being called, which is
+    # a thing you asked for rather than something it does on its own.
+    results.append(("...along the ground, never up or down", window.sprite_y == height_before))
     results.append(("...and stays on screen", window._on_screen(window.sprite_x, window.sprite_y)))
 
     # Being thrown, and being called: both move the sprite every frame.

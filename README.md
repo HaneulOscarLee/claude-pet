@@ -620,9 +620,12 @@ walks over, across monitors if it has to, stopping short so it is not sitting
 on whatever you were about to click. Waving right beside the pet works too;
 only the sprite itself is excluded, since that is where stroking happens.
 
-It answers at once and then walks at its ordinary pace, which on a wide desk
-means it takes a while. That is the intent: a pet that crosses two monitors in
-a second is a cursor with a sprite on it. A keyboard shortcut
+It answers at once and then walks over a little brisker than it wanders, which
+on a wide desk still takes a while. That is the intent: a pet that crosses two
+monitors in a second is a cursor with a sprite on it.
+
+Wandering stays along the ground, sideways only. Up and down is for being
+called — something you asked for, rather than something it does on its own. A keyboard shortcut
 would be the obvious way and is not available — global shortcuts need a
 desktop portal this Wayland session does not provide, and the window refuses
 focus on purpose so an always-on-top pet never swallows a keystroke. The

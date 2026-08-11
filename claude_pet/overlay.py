@@ -283,11 +283,14 @@ MOTION_POLL_MS = 16
 #: sprite between you and whatever you were about to click.
 CALL_ARRIVAL_PIXELS = 40
 
-# A summoned pet walks at the pace it wanders at, and no faster. Hurrying it
-# was tried and is not an improvement: a pet that crosses the desk in a
-# second and a half is a cursor with a sprite on it. What makes the delay
-# bearable is that it answers straight away -- see `come_here` -- so you know
-# it heard you and can get on with something while it walks over.
+#: How much brisker than a wander a summoned pet is.
+#:
+#: Barely: it is walking, not running. Making the speed depend on the
+#: distance was tried and is worse -- a pet that crosses two monitors in a
+#: second and a half is a cursor with a sprite on it. What makes the walk
+#: bearable is that it answers the moment it hears you, so the time it takes
+#: to arrive is time you can spend on something else.
+CALL_PACE = 2.0
 
 #: Set CLAUDE_PET_DEBUG=1 to trace menu dismissal decisions. The signals here
 #: differ between X11 and Wayland surfaces and cannot be reasoned about from the
@@ -1176,12 +1179,14 @@ class Overlay(Gtk.Window):
         # screen, not somewhere on a line, and a pet that only ever slides
         # sideways is answering half the summons.
         direction = 1 if remaining_x >= 0 else -1
-        # The wander's own pace, in pixels per second, so that walking to you
-        # and walking about look like the same animal. Expressed as a rate
-        # because this runs on its own timer rather than the animation frame.
-        speed = max(1, int(self.settings.get("walk_speed") or 3)) * max(
+        # The wander's own pace with a little on top, so that walking to you
+        # and walking about look like the same animal in a mild hurry.
+        # Expressed as a rate because this runs on its own timer rather than
+        # the animation frame.
+        wander = max(1, int(self.settings.get("walk_speed") or 3)) * max(
             1, int(self.settings.get("fps") or 10)
         )
+        speed = wander * CALL_PACE
         step = speed * elapsed
         self.walking = direction
         # Only left and right exist as poses, so the horizontal part of the
