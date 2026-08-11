@@ -84,6 +84,55 @@ def checks() -> list[tuple[str, bool]]:
     window.petted_count = 0
     window._enjoy_petting()
     results.append(("petting works end to end", window.petted_count == 1))
+
+    # Every menu page, drawn for real. A missing label or a mistyped entry
+    # kind raises only when someone opens that page, which no other test
+    # goes near -- and a menu that raises leaves the pet unclickable.
+    from gi.repository import Gtk
+
+    popup = Gtk.Window()
+    popup.menu_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    popup.add(popup.menu_box)
+    for page in ("main", "pets", "language", "behaviour", "tuning"):
+        try:
+            window._render_page(popup, page)
+            drawn = len(popup.menu_box.get_children())
+        except Exception as exc:  # noqa: BLE001 -- the point is that it does not
+            drawn, why = 0, exc
+            results.append((f"the {page} page draws -- {exc!r}", False))
+            continue
+        results.append((f"the {page} page draws ({drawn} rows)", drawn > 0))
+
+    # The sliders have to move something. Each one is applied on the spot,
+    # which is the only reason to have a slider rather than a config key.
+    #
+    # Saving is stubbed out: a test has no business writing the settings of
+    # whoever happens to be running it, and resetting the tuning would put
+    # their sliders back to the defaults.
+    written: list[dict] = []
+    config.update = lambda **values: written.append(values)
+    window._render_page(popup, "tuning")
+    for key, low, high, _step, _digits in window.TUNABLE:
+        window._tune(key, high)
+        at_high = window.settings[key]
+        window._tune(key, low)
+        results.append((f"{key} follows its slider",
+                        at_high != window.settings[key]
+                        and abs(window.settings[key] - low) < 0.01))
+    results.append(("a throw picks up the tuned friction",
+                    abs(window.flick.friction
+                        - window.settings["throw_friction"]) < 0.01))
+    results.append(("a summons picks up the tuned roundness",
+                    abs(window.call_stroke.roundness_wanted
+                        - window.settings["call_roundness"]) < 0.01))
+
+    window._reset_tuning(popup)
+    results.append(("resetting puts every default back",
+                    all(window.settings[key] == config.DEFAULTS[key]
+                        for key, *_rest in window.TUNABLE)))
+    results.append(("...and is written out once", len(written) == 1))
+    results.append(("...naming every knob",
+                    written and set(written[0]) == {k for k, *_r in window.TUNABLE}))
     return results
 
 

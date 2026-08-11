@@ -50,11 +50,26 @@ FLICK_SECONDS = 0.12
 
 
 class Throw:
-    """A pet in flight: velocity, friction, and the walls it bounces off."""
+    """A pet in flight: velocity, friction, and the walls it bounces off.
 
-    def __init__(self, velocity_x: float, velocity_y: float) -> None:
+    Friction and bounce are arguments rather than constants because they are
+    the two knobs worth handing over -- how far a throw carries and how much
+    the walls give back are matters of taste, and nobody can settle theirs
+    from a constant in a file they never open. Clamped, since a friction of 1
+    is a pet that never stops and 0 is one that never moves.
+    """
+
+    def __init__(
+        self,
+        velocity_x: float,
+        velocity_y: float,
+        friction: float = FRICTION,
+        bounce: float = BOUNCE,
+    ) -> None:
         self.velocity_x = velocity_x
         self.velocity_y = velocity_y
+        self.friction = min(max(friction, 0.001), 0.9)
+        self.bounce = min(max(bounce, 0.0), 0.95)
 
     @property
     def moving(self) -> bool:
@@ -70,14 +85,14 @@ class Throw:
         thing to have built.
         """
         left, top, right, bottom = bounds
-        decay = FRICTION**seconds
+        decay = self.friction**seconds
 
         # The exact integral of v·FRICTION^t over the step, rather than
         # velocity times elapsed. Multiplying is a Riemann sum, and its error
         # grows with the step -- which would make a throw travel a different
         # distance on a pet animating at 4fps than at 30, both of which are
         # settings someone can choose.
-        travel = (1.0 - decay) / -math.log(FRICTION)
+        travel = (1.0 - decay) / -math.log(self.friction)
         x += self.velocity_x * travel
         y += self.velocity_y * travel
 
@@ -85,13 +100,13 @@ class Throw:
         self.velocity_y *= decay
 
         if x <= left:
-            x, self.velocity_x = left, abs(self.velocity_x) * BOUNCE
+            x, self.velocity_x = left, abs(self.velocity_x) * self.bounce
         elif x >= right:
-            x, self.velocity_x = right, -abs(self.velocity_x) * BOUNCE
+            x, self.velocity_x = right, -abs(self.velocity_x) * self.bounce
         if y <= top:
-            y, self.velocity_y = top, abs(self.velocity_y) * BOUNCE
+            y, self.velocity_y = top, abs(self.velocity_y) * self.bounce
         elif y >= bottom:
-            y, self.velocity_y = bottom, -abs(self.velocity_y) * BOUNCE
+            y, self.velocity_y = bottom, -abs(self.velocity_y) * self.bounce
 
         return x, y
 
@@ -104,7 +119,18 @@ class Flick:
     speed at the moment of release is the whole question.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        threshold: float = THROW_SPEED,
+        friction: float = FRICTION,
+        bounce: float = BOUNCE,
+    ) -> None:
+        #: How hard the flick has to be. Handed over for the same reason as
+        #: friction: it was argued about twice and guessed at three times, and
+        #: the person it is wrong for is the only one who can say so.
+        self.threshold = threshold
+        self.friction = friction
+        self.bounce = bounce
         self.samples: list[tuple[float, float, float]] = []
 
     def clear(self) -> None:
@@ -137,9 +163,9 @@ class Flick:
         # Straight-line speed, not the sum of the parts: adding them makes a
         # diagonal drag read as half again as fast as it was, so throws
         # aimed at a corner triggered on gentler flicks than sideways ones.
-        if math.hypot(velocity_x, velocity_y) < THROW_SPEED:
+        if math.hypot(velocity_x, velocity_y) < self.threshold:
             return None
-        return Throw(velocity_x, velocity_y)
+        return Throw(velocity_x, velocity_y, self.friction, self.bounce)
 
     def speed(self) -> float:
         """Straight-line speed at release, in pixels per second.

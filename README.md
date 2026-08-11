@@ -112,6 +112,13 @@ edited between markers, so your comments and key order survive and
 
 Not every agent has every event: Codex has no `Notification` or `SessionEnd`,
 Gemini no `SubagentStop`. Nothing is offered to an agent that would reject it.
+
+Two things about Codex are worth knowing, both its own behaviour rather than
+anything configurable here. **Hooks do not load in a directory you have not
+trusted** — Codex says so in the prompt it shows on entering one, and until
+you answer it the pet hears nothing. And **`codex exec` fires only `Stop`**,
+with no `SessionStart` or `UserPromptSubmit`, so a non-interactive run will
+not bring the pet up.
 Non-Claude sessions are labelled in `claude-pet status`, and `doctor` says
 where each agent stands.
 
@@ -301,6 +308,15 @@ claude-pet set language ko
 | `petting` | `true` | react to being stroked |
 | `throwing` | `true` | can be thrown with a flick |
 | `call` | `true` | come when a circle is drawn |
+| `teleport` | `true` | appear at a drawn star |
+| `on_top` | `true` | keep the pet above other windows |
+| `throw_flick` | `4500` | px/s a release must reach to count as a throw |
+| `throw_friction` | `0.08` | fraction of speed kept after a second |
+| `throw_bounce` | `0.45` | how much a wall gives back |
+| `call_pace` | `2.0` | walking speed on an errand, as a multiple of wandering |
+| `call_seconds` | `0.4` | how quickly the circle must be drawn |
+| `call_size` | `90` | how big it must be, across |
+| `call_roundness` | `0.6` | how round: short axis over long |
 | `fps` | `10` | animation frames per second |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
 | `update_check` | `true` | look for a newer version in the background |
@@ -320,6 +336,7 @@ Stored in `~/.config/claude-pet/config.json`.
 | rub back and forth over it | pet it |
 | flick it while dragging | throw it — it slides and bounces off the edges |
 | draw a circle anywhere on screen | it walks over |
+| draw a star | it appears there instead of walking |
 | right-click | everything below, without a terminal |
 
 Clicks land only on the sprite itself; the rest of the window is click-through,
@@ -350,6 +367,24 @@ The pet waves the moment it hears you, follows the pointer as it walks, and
 stops *beside* it rather than on top of it. It goes a little brisker than it
 wanders and no more. Wandering itself stays along the ground, sideways only;
 up and down is for being called.
+
+**A star teleports it** there instead, for when a walk across two monitors is
+a wait rather than a charm. A star is corners where a circle is a curve, which
+is how they are told apart: the five points each turn about 144 degrees, all
+the same way round, with straight runs between. A circle, a square, a triangle
+and a zigzag are none of them stars, and a star does not also read as a
+circle.
+
+**How all this feels is yours to set.** Right-click → Behaviour → Tuning has a
+slider for each of it — how hard a flick has to be, how much friction and
+bounce a throw has, how fast the pet walks when called, and how quick, how big
+and how round the circle has to be. They apply as you drag them, and **Reset
+to defaults** puts them all back. Every one of these was guessed at and
+argued about before it was a slider, which is the argument for making it one.
+
+**Always on top** is in the same menu, on by default. Normally the point of an
+overlay, but a pet in front of what you are reading is a pet in the way, and
+nothing else can put it behind a window.
 
 ### Calling it on Wayland
 
@@ -394,8 +429,9 @@ clawd · v2
 ──────────────
 Pets…                  →  pick one · browse the gallery · install · remove
 Language…              →  automatic · English · 한국어
-Behaviour…             →  wander · being petted · being thrown · being called
+Behaviour…             →  wander · petted · thrown · called · star · tuning
 ──────────────
+Always on top               ✓
 Desktop notifications
 Start with Claude           ✓
 Follow Claude Desktop       ✓

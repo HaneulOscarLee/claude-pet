@@ -212,6 +212,40 @@ def toml_hook_block(agent_id: str, command: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def any_running() -> bool:
+    """Whether any agent this pet follows is running at all.
+
+    A /proc sweep, and it belongs here rather than in `state` because
+    recognising an agent is not uniform: Claude and Codex are processes named
+    after themselves, Gemini is a process called `node` that has to be told
+    apart by its command line. Sweeping for comm alone would let any Node
+    program on the machine pass for a Gemini session.
+
+    Errs towards True on any failure: never conclude everything has gone away
+    because /proc could not be read.
+    """
+    import os
+
+    try:
+        entries = [entry.name for entry in os.scandir("/proc") if entry.name.isdigit()]
+    except OSError:
+        return True
+
+    wanted = [(name, spec) for name, spec in AGENTS.items() if spec.get("comm")]
+    for pid in entries:
+        comm = _comm_of(pid)
+        if not comm:
+            continue
+        for name, spec in wanted:
+            if comm != spec["comm"]:
+                continue
+            if not spec.get("cmdline"):
+                return True
+            if is_process(name, int(pid)):
+                return True
+    return False
+
+
 def codex_hook_status(timeout: float = 8.0) -> tuple[int, int] | None:
     """How many hooks Codex has of ours, and how many it will actually run.
 

@@ -92,8 +92,19 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.walk": "Wander around",
         "menu.petting": "Enjoy being petted",
         "menu.throwing": "Can be thrown",
-        "menu.call": "Come when waved at",
+        "menu.call": "Come when called",
+        "menu.teleport": "Appear at a drawn star",
+        "menu.on_top": "Always on top",
         "menu.behaviour": "Behaviour…",
+        "menu.tuning": "Tuning…",
+        "menu.tune_reset": "Reset to defaults",
+        "tune.throw_flick": "Throw · flick needed",
+        "tune.throw_friction": "Throw · friction",
+        "tune.throw_bounce": "Throw · bounce",
+        "tune.call_pace": "Call · walking speed",
+        "tune.call_seconds": "Call · draw it within",
+        "tune.call_size": "Call · circle size",
+        "tune.call_roundness": "Call · how round",
         "menu.look": "Watch the pointer",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
@@ -116,6 +127,7 @@ LABELS: dict[str, dict[str, str]] = {
         "toast.reset": "back to its corner",
         "toast.coming": "coming",
         "toast.arrived": "here",
+        "toast.teleported": "poof!",
         "menu.pets": "Pets…",
         "menu.language": "Language…",
         "menu.reset": "Reset position",
@@ -161,9 +173,21 @@ LABELS: dict[str, dict[str, str]] = {
         "toast.reset": "제자리로 돌아왔어요",
         "toast.coming": "가는 중",
         "toast.arrived": "왔어요",
+        "toast.teleported": "슝!",
         "menu.pets": "펫 관리…",
         "menu.language": "언어…",
         "menu.reset": "위치 초기화",
+        "menu.teleport": "별 그리면 순간이동",
+        "menu.on_top": "항상 위에",
+        "menu.tuning": "세부 조정…",
+        "menu.tune_reset": "기본값으로",
+        "tune.throw_flick": "던지기 · 필요한 세기",
+        "tune.throw_friction": "던지기 · 마찰",
+        "tune.throw_bounce": "던지기 · 튕김",
+        "tune.call_pace": "부르기 · 걸음 속도",
+        "tune.call_seconds": "부르기 · 그리는 시간",
+        "tune.call_size": "부르기 · 원 크기",
+        "tune.call_roundness": "부르기 · 원형 정도",
         "menu.back": "‹ 뒤로",
         "menu.settings": "설정",
         "lang.auto": "자동",
@@ -433,14 +457,15 @@ class Overlay(Gtk.Window):
         #: Recognises the back-and-forth of a hovering pointer -- over the
         #: pet it means affection, away from it means come here.
         self.stroke = petting.Stroke()
-        self.call_stroke = petting.Stroke(
-            petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
-            one_way=True, seconds=petting.CALL_SECONDS,
-        )
+        self.call_stroke = petting.Stroke()  # both replaced by _rebuild_gestures
+        self.star_stroke = petting.Star()
         self.called_at = 0.0
         self.pointer_checked_at = 0.0
         #: The tail of a drag, and the throw it may have ended in.
         self.flick = motion.Flick()
+        #: Pending config write for a slider being dragged.
+        self.tune_save: int | None = None
+        self._rebuild_gestures()
         self.throw: motion.Throw | None = None
         self.thrown_at = 0.0
         #: Where to walk to when called, as a sprite position. None means
@@ -501,7 +526,10 @@ class Overlay(Gtk.Window):
         self.set_resizable(False)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
-        self.set_keep_above(True)
+        # Normally what an overlay is for, but a pet in front of what you are
+        # reading is a pet in the way, and nothing else can put it behind a
+        # window -- so it is a toggle.
+        self.set_keep_above(bool(self.settings.get("on_top", True)))
         self.set_accept_focus(False)
         self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self.set_app_paintable(True)
@@ -1156,15 +1184,22 @@ class Overlay(Gtk.Window):
             # Aim at where the pointer is now, not where it was when called.
             # You move on while it walks, and a pet arriving at the place
             # you used to be has answered a question nobody asked.
-            here = self._trusted_pointer_position()
+            here, fresh = pointer_visibility.sample(self._pointer_position)
             if here is not None:
-                if self.pointer_was is not None:
-                    self.pointer_settled = (
-                        math.hypot(here[0] - self.pointer_was[0],
-                                   here[1] - self.pointer_was[1])
-                        <= CALL_SETTLED_PIXELS
-                    )
-                self.pointer_was = here
+                # Only a fresh reading says anything about whether the pointer
+                # has stopped. This runs sixty times a second and the reading
+                # is shared with the gesture poll, so most ticks see a repeat
+                # -- and a repeat compared against itself is nought pixels of
+                # movement, which reads as settled and lets the pet decide it
+                # has arrived while the pointer is still moving.
+                if fresh:
+                    if self.pointer_was is not None:
+                        self.pointer_settled = (
+                            math.hypot(here[0] - self.pointer_was[0],
+                                       here[1] - self.pointer_was[1])
+                            <= CALL_SETTLED_PIXELS
+                        )
+                    self.pointer_was = here
                 self.walk_target = (
                     here[0] - self.view.width // 2,
                     here[1] - self.view.height // 2,
@@ -1236,7 +1271,7 @@ class Overlay(Gtk.Window):
         wander = max(1, int(self.settings.get("walk_speed") or 3)) * max(
             1, int(self.settings.get("fps") or 10)
         )
-        speed = wander * CALL_PACE
+        speed = wander * self._number("call_pace", CALL_PACE)
         step = speed * elapsed
         self.walking = direction
         # Only left and right exist as poses, so the horizontal part of the
@@ -1262,6 +1297,76 @@ class Overlay(Gtk.Window):
             return None
         _screen, x, y = pointer.get_position()
         return int(x), int(y)
+
+    #: What the tuning page offers, and the bounds it offers it within.
+    #: (settings key, low, high, step, decimals)
+    TUNABLE = (
+        ("throw_flick", 1000.0, 9000.0, 250.0, 0),
+        ("throw_friction", 0.01, 0.5, 0.01, 2),
+        ("throw_bounce", 0.0, 0.9, 0.05, 2),
+        ("call_pace", 1.0, 6.0, 0.5, 1),
+        ("call_seconds", 0.2, 2.0, 0.1, 1),
+        ("call_size", 40.0, 300.0, 10.0, 0),
+        ("call_roundness", 0.3, 0.9, 0.05, 2),
+    )
+
+    def _number(self, key: str, default: float) -> float:
+        """A setting as a number, whatever ended up in the file.
+
+        `set` used to store "0.08" as a string, and a slider fed a string
+        raises rather than moving. Anything unreadable falls back to the
+        default rather than taking the pet down.
+        """
+        try:
+            return float(self.settings.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _rebuild_gestures(self) -> None:
+        """Remake the throw and summons detectors from the current settings.
+
+        Called on startup and whenever a slider moves, so tuning applies as
+        you drag it rather than at the next restart -- which is the whole
+        point of a slider over a config key.
+        """
+        self.flick = motion.Flick(
+            self._number("throw_flick", motion.THROW_SPEED),
+            self._number("throw_friction", motion.FRICTION),
+            self._number("throw_bounce", motion.BOUNCE),
+        )
+        self.call_stroke = petting.Stroke(
+            petting.CALL_TURN_RADIANS,
+            int(self._number("call_size", petting.CALL_SPAN_PIXELS)),
+            one_way=True,
+            seconds=self._number("call_seconds", petting.CALL_SECONDS),
+            roundness=self._number("call_roundness", petting.CALL_ROUNDNESS),
+        )
+        self.star_stroke = petting.Star()
+
+    def _tune(self, key: str, value: float) -> None:
+        """Apply a slider straight away, and save it shortly after.
+
+        Dragging a slider fires continuously, and writing the config file on
+        every step would be a few hundred writes for one adjustment. The
+        behaviour changes immediately; the file catches up when you stop.
+        """
+        self.settings[key] = round(value, 3)
+        self._rebuild_gestures()
+        if self.tune_save is not None:
+            GLib.source_remove(self.tune_save)
+        self.tune_save = GLib.timeout_add(500, self._save_tuning)
+
+    def _save_tuning(self) -> bool:
+        self.tune_save = None
+        config.update(**{key: self.settings[key] for key, *_rest in self.TUNABLE})
+        return False
+
+    def _reset_tuning(self, popup) -> None:
+        for key, *_rest in self.TUNABLE:
+            self.settings[key] = config.DEFAULTS[key]
+        self._rebuild_gestures()
+        self._save_tuning()
+        self._render_page(popup, "tuning")
 
     def _trusted_pointer_position(self) -> tuple[int, int] | None:
         """The pointer, but only when X11 still knows where it is.
@@ -1292,8 +1397,11 @@ class Overlay(Gtk.Window):
         someone reading, and a pet that came every time you stopped to read
         would be unbearable.
         """
-        if not self.settings.get("call", True) or self.dragging or self.throw is not None:
+        wants_call = bool(self.settings.get("call", True))
+        wants_star = bool(self.settings.get("teleport", True))
+        if not (wants_call or wants_star) or self.dragging or self.throw is not None:
             self.call_stroke.reset()
+            self.star_stroke.reset()
             return True
 
         now = time.monotonic()
@@ -1303,6 +1411,7 @@ class Overlay(Gtk.Window):
             # which is better than finishing it with coordinates that have
             # stopped moving.
             self.call_stroke.reset()
+            self.star_stroke.reset()
             return True
         x, y = position
 
@@ -1315,11 +1424,43 @@ class Overlay(Gtk.Window):
         if (self.sprite_x - margin <= x <= self.sprite_x + self.view.width + margin
                 and self.sprite_y - margin <= y <= self.sprite_y + self.view.height + margin):
             self.call_stroke.reset()
+            self.star_stroke.reset()
             return True
 
-        if self.call_stroke.feed(x, now, y):
+        # The star first. The two cannot really be confused -- a star's
+        # corners are excluded from the turning a circle is judged by, so a
+        # star accumulates almost none of it -- but a sloppy one drawn very
+        # fast could reach both, and appearing where it was drawn is the more
+        # specific of the two requests.
+        if wants_star and self.star_stroke.feed(x, now, y):
+            self.teleport_to(x, y)
+        elif wants_call and self.call_stroke.feed(x, now, y):
             self.come_here(x, y)
         return True
+
+    def teleport_to(self, x: int, y: int) -> None:
+        """Appear where the star was drawn, rather than walking there.
+
+        The other half of being called, and the reason both exist: crossing a
+        wide desk on foot is the charm of it most of the time and a wait the
+        rest of the time. A star is more trouble to draw than a circle, which
+        is about right for the shortcut.
+        """
+        self.throw = None
+        self.walk_target = None
+        self.errand_at = None
+        self.pointer_was = None
+        self._place_sprite(
+            int(x) - self.view.width // 2,
+            int(y) - self.view.height // 2,
+            across_screens=True,
+        )
+        self.settings["position"] = [self.pos_x, self.pos_y]
+        config.update(position=self.settings["position"])
+        self._halt_walk(pause=CALL_REST_SECONDS)
+        self._react("waving")
+        self._flash(self.labels["toast.teleported"], seconds=2.0)
+        trace(f"teleported to x={x} y={y}")
 
     def come_here(self, x: int | None = None, y: int | None = None) -> None:
         """Send the pet to the pointer, or to a given place."""
@@ -1749,6 +1890,15 @@ class Overlay(Gtk.Window):
             entries.append(("action", self.labels["menu.remove"], self._remove_pack))
             return entries
 
+        if page == "tuning":
+            entries: list[tuple] = []
+            for key, low, high, step, digits in self.TUNABLE:
+                entries.append(("slider", key, self.labels[f"tune.{key}"],
+                                low, high, step, digits))
+            entries.append(("separator",))
+            entries.append(("reset-tuning", self.labels["menu.tune_reset"]))
+            return entries
+
         if page == "language":
             return [
                 ("choice", self.labels[f"lang.{code}"], "language", code)
@@ -1764,13 +1914,17 @@ class Overlay(Gtk.Window):
                 ("toggle", "petting", self.labels["menu.petting"], True),
                 ("toggle", "throwing", self.labels["menu.throwing"], True),
                 ("toggle", "call", self.labels["menu.call"], True),
+                ("toggle", "teleport", self.labels["menu.teleport"], True),
             ]
             # Only offered by a pack that has the poses for it.
             if self.view.looks:
                 entries.append(("toggle", "look_at_mouse", self.labels["menu.look"], True))
+            entries.append(("separator",))
+            entries.append(("submenu", self.labels["menu.tuning"], "tuning"))
             return entries
 
         toggles = [
+            ("on_top", self.labels["menu.on_top"], True),
             ("notifications", self.labels["menu.notify"], False),
             ("autostart", self.labels["menu.autostart"], True),
             ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
@@ -1824,8 +1978,10 @@ class Overlay(Gtk.Window):
         config.update(**{key: self.settings[key]})
         if key == "desktop":
             self._apply_desktop_setting()
-        else:
-            self._refresh_tray()
+            return
+        if key == "on_top":
+            self.set_keep_above(bool(self.settings[key]))
+        self._refresh_tray()
 
     def _render_page(self, popup, page: str, event=None) -> None:
         box = popup.menu_box
@@ -1859,10 +2015,31 @@ class Overlay(Gtk.Window):
             row(self.labels["menu.back"], go("main"))
             separator()
 
+        def slider(key: str, label: str, low: float, high: float,
+                   step: float, digits: int) -> None:
+            holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            holder.set_margin_start(12)
+            holder.set_margin_end(12)
+            caption_label = Gtk.Label(label=label)
+            caption_label.set_alignment(0.0, 0.5)
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, low, high, step)
+            scale.set_digits(digits)
+            scale.set_value(self._number(key, config.DEFAULTS[key]))
+            scale.set_size_request(220, -1)
+            scale.set_value_pos(Gtk.PositionType.RIGHT)
+            scale.connect("value-changed", lambda widget: self._tune(key, widget.get_value()))
+            holder.pack_start(caption_label, False, False, 0)
+            holder.pack_start(scale, False, False, 0)
+            box.pack_start(holder, False, False, 2)
+
         for entry in self._menu_model(page):
             kind = entry[0]
             if kind == "separator":
                 separator()
+            elif kind == "slider":
+                slider(*entry[1:])
+            elif kind == "reset-tuning":
+                row(entry[1], lambda *_a: self._reset_tuning(popup))
             elif kind == "caption":
                 caption(entry[1])
             elif kind == "submenu":

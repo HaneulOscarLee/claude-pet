@@ -495,7 +495,12 @@ def cmd_set(args: argparse.Namespace) -> int:
         try:
             value = int(raw)
         except ValueError:
-            value = raw
+            try:
+                # Friction and pace are fractions, and storing "0.08" as a
+                # string leaves the overlay comparing text to numbers.
+                value = float(raw)
+            except ValueError:
+                value = raw
     settings[args.key] = value
     if args.key == "anchor":
         # A stored drag position would otherwise override the new anchor.

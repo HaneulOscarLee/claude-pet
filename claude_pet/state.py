@@ -93,7 +93,7 @@ def _write(data: dict[str, Any]) -> None:
 #: `comm` of the Claude Code process.
 CLAUDE_COMM = "claude"
 
-#: `any_claude_running()` is a /proc sweep, so its answer is reused briefly.
+#: `any_agent_running()` is a /proc sweep, so its answer is reused briefly.
 _SCAN_TTL_SECONDS = 3.0
 _scan_cache: tuple[float, bool] | None = None
 
@@ -106,27 +106,31 @@ def _comm_of(pid: str | int) -> str:
         return ""
 
 
-def any_claude_running() -> bool:
-    """Whether any Claude Code process exists on this machine at all.
+def any_agent_running() -> bool:
+    """Whether any coding agent this pet follows exists on this machine at all.
 
     The backstop for sessions with no recorded pid -- entries written before
     pids were recorded, which would otherwise be trusted for the whole TTL and
     keep the pet alive forever. Errs towards True: never kill the pet on a
     failed guess.
+
+    It asked for a *Claude* process for as long as Claude was the only agent,
+    and stayed that way after Codex and Gemini were added. So on a machine
+    running Codex and no Claude, every session with no pid was judged dead the
+    moment it was written -- reported as the pet not noticing Codex at all,
+    which was very nearly the truth.
     """
     global _scan_cache
     now = time.monotonic()
     if _scan_cache is not None and now - _scan_cache[0] < _SCAN_TTL_SECONDS:
         return _scan_cache[1]
 
-    found = True
-    try:
-        found = any(
-            entry.name.isdigit() and _comm_of(entry.name).startswith(CLAUDE_COMM)
-            for entry in os.scandir("/proc")
-        )
-    except OSError:
-        found = True
+    from . import agents
+
+    # Asked of the registry: recognising an agent is its business, and
+    # Gemini's process is called `node`, so a sweep for names alone would let
+    # any Node program on the machine pass for a live session.
+    found = agents.any_running()
     _scan_cache = (now, found)
     return found
 
@@ -243,13 +247,25 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
             return agents.is_process(agent, pid)
 
         recorded = locator.get("comm")
-        expected = recorded if isinstance(recorded, str) and recorded else CLAUDE_COMM
-
         # Age deliberately says nothing here. A session sitting at its prompt
         # overnight is idle, not gone, and the TTL used to drop it anyway --
         # taking the pet with it if it was the last one, and leaving it dead
         # until a brand new session was started.
-        return _comm_of(pid) == expected
+        if isinstance(recorded, str) and recorded:
+            return _comm_of(pid) == recorded
+
+        # No agent and no comm: an entry written by a version that recorded
+        # neither. Any agent will do rather than Claude alone -- insisting on
+        # Claude declared a live Codex session dead, which is the reverse of
+        # what a pid check is for.
+        from . import agents
+
+        running = _comm_of(pid)
+        if not running:
+            return False
+        return any(
+            running == spec["comm"] for spec in agents.AGENTS.values() if spec.get("comm")
+        ) or running == CLAUDE_COMM
 
     # No pid recorded, which is the case for entries written before pids were.
     # Nothing better to go on than age and whether any Claude exists at all:
@@ -261,7 +277,13 @@ def is_alive(session: dict[str, Any], now: float) -> bool:
     ]
     if not stamps or now - max(stamps) > SESSION_TTL_SECONDS:
         return False
-    return any_claude_running()
+    return any_agent_running()
+
+
+#: The old name, kept because it is what the tests and any outside caller
+#: know. It never meant only Claude in spirit, only in code.
+def any_claude_running() -> bool:
+    return any_agent_running()
 
 
 def _prune(sessions: dict[str, Any], now: float) -> None:

@@ -146,6 +146,20 @@ _bridge_missing_at: float | None = None
 #: quietly stops answering is the fault this whole module exists to avoid.
 BRIDGE_RETRY_SECONDS = 30.0
 
+#: Long enough that the 60Hz walk loop reuses one answer for a few frames,
+#: short enough that the 50ms gesture poll always gets a fresh one.
+#:
+#: Without this the walk loop asked the shell sixty times a second, each a
+#: synchronous round trip into the compositor's own main loop. Reported as a
+#: circle going unrecognised over a Wayland window and a pet stopping partway
+#: through an errand: samples arrived late enough to break the gesture up, and
+#: one slow reply was enough to strand the walk.
+SAMPLE_SECONDS = 0.04
+
+#: Short. This runs on a timer with sixteen milliseconds to spare, and a
+#: reply that has not come by now is one to do without rather than wait for.
+BRIDGE_TIMEOUT_MS = 60
+
 BRIDGE_PATH = "/org/gnome/Shell/Extensions/ClaudePetPointer"
 BRIDGE_IFACE = "org.gnome.Shell.Extensions.ClaudePetPointer"
 
@@ -172,10 +186,17 @@ def from_shell() -> tuple[int, int] | None:
                 Gio.BusType.SESSION, Gio.DBusProxyFlags.DO_NOT_AUTO_START,
                 None, "org.gnome.Shell", BRIDGE_PATH, BRIDGE_IFACE, None,
             )
-        reply = _bridge.call_sync("GetPointer", None, Gio.DBusCallFlags.NONE, 200, None)
-    except Exception:  # noqa: BLE001 -- absent, refusing, or no gi at all
-        _bridge_missing_at = time.monotonic()
-        _bridge = None
+        reply = _bridge.call_sync(
+            "GetPointer", None, Gio.DBusCallFlags.NONE, BRIDGE_TIMEOUT_MS, None
+        )
+    except Exception as exc:  # noqa: BLE001 -- absent, refusing, or no gi at all
+        # A timeout is the shell being busy, not the bridge being gone.
+        # Backing off thirty seconds for one slow reply is what stranded a
+        # walk halfway: the pet carried on to wherever it was last aiming and
+        # stopped there, which looks exactly like it changed its mind.
+        if not _is_transient(exc):
+            _bridge_missing_at = time.monotonic()
+            _bridge = None
         return None
     try:
         x, y = reply.unpack()
@@ -185,11 +206,43 @@ def from_shell() -> tuple[int, int] | None:
     return int(x), int(y)
 
 
+def _is_transient(exc: Exception) -> bool:
+    """Whether this failure is worth trying again straight away.
+
+    A timeout or a dropped reply is the shell being busy. Anything else --
+    no such name, no such object, no such method -- is the extension not
+    being installed, which is worth backing off from.
+    """
+    try:
+        from gi.repository import Gio, GLib
+    except ImportError:
+        return False
+    if not isinstance(exc, GLib.Error):
+        return False
+    quark = Gio.DBusError.quark()
+    return any(
+        exc.matches(quark, code)
+        for code in (Gio.DBusError.TIMEOUT, Gio.DBusError.NO_REPLY, Gio.DBusError.TIMED_OUT)
+    )
+
+
 def bridge_present() -> bool:
     """Whether the shell answers, checked afresh rather than from the cache."""
     global _bridge, _bridge_missing_at
     _bridge, _bridge_missing_at = None, None
+    forget()
     return from_shell() is not None
+
+
+def forget() -> None:
+    """Drop the cached reading, so the next ask goes and looks."""
+    global _sample, _sample_at
+    _sample, _sample_at = None, 0.0
+
+
+#: The last answer, and when it was taken.
+_sample: tuple[int, int] | None = None
+_sample_at = 0.0
 
 
 def trusted_position(raw) -> tuple[int, int] | None:
@@ -200,9 +253,31 @@ def trusted_position(raw) -> tuple[int, int] | None:
     work the compositor should not be doing. The bridge is for the case X11
     cannot cover, which is the only case it was installed for.
     """
-    if visible():
-        return raw()
-    return from_shell()
+    return sample(raw)[0]
+
+
+def sample(raw) -> tuple[tuple[int, int] | None, bool]:
+    """The pointer, and whether this is a fresh reading or a reused one.
+
+    Two callers want this at once -- the gesture poll every 50ms and the walk
+    loop sixty times a second -- and on the bridge path each reading is a
+    round trip into the compositor. So one reading serves both, and the walk
+    loop is told when it is looking at a repeat: `settled` is judged from
+    consecutive readings, and a reused one would say the pointer had stopped
+    when it had not.
+    """
+    global _sample, _sample_at
+    now = time.monotonic()
+    if _sample is not None and now - _sample_at < SAMPLE_SECONDS:
+        return _sample, False
+    fresh = raw() if visible() else from_shell()
+    if fresh is None:
+        # Say nothing rather than repeat a stale answer: a position nobody can
+        # vouch for is the thing this module exists to refuse.
+        _sample, _sample_at = None, now
+        return None, False
+    _sample, _sample_at = fresh, now
+    return fresh, True
 
 
 def explain() -> str | None:

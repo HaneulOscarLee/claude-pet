@@ -22,8 +22,24 @@ DEFAULTS: dict[str, Any] = {
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "petting": True,      # react to being stroked with the pointer
     "throwing": True,     # a fast flick sends it sliding
-    "call": True,         # wave the pointer at it and it walks over
+    "call": True,         # draw a circle and it walks over
+    "teleport": True,     # draw a star and it appears there instead
+    # Normally the point of it, but a pet in front of what you are reading is
+    # a pet in the way, and there is no other way to put it behind a window:
+    # the overlay asks the window manager to keep it above everything.
+    "on_top": True,
     "petted_count": 0,    # how many times it has been, kept across restarts
+    # How the two movements feel. Sliders in the menu rather than constants in
+    # a file, because every one of these was guessed at, argued about, and
+    # changed again -- "too sensitive" and "too slow" are reports nobody else
+    # can settle for you.
+    "throw_flick": 4500,   # px/s the release must reach to count as a throw
+    "throw_friction": 0.08,  # fraction of speed kept after a second; lower stops sooner
+    "throw_bounce": 0.45,  # how much a wall gives back
+    "call_pace": 2.0,      # walking speed on an errand, as a multiple of wandering
+    "call_seconds": 0.4,   # how quickly the circle must be drawn
+    "call_size": 90,       # how big it must be, across
+    "call_roundness": 0.6, # how round: short axis over long, 1 being a circle
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background
     # Follow the Claude Desktop app too: report its chat replies, and count it

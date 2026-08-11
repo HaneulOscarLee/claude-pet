@@ -263,6 +263,112 @@ def summons() -> list[tuple[str, bool]]:
     return results
 
 
+def stars() -> list[tuple[str, bool]]:
+    """A star teleports the pet, so it must be a star and not a scribble.
+
+    Traced at a constant hand speed along the real path, sampled at the
+    overlay's own 50ms, and repeated at several sampling offsets -- because
+    the first attempt measured each corner from a single pair of samples, and
+    a sample landing on a point splits its 144 degrees into two 72s, neither
+    of which is a corner. Five points give that several chances to happen,
+    which is why it was reported as simply not working.
+    """
+    import math
+
+    def trace(points, seconds: float, jitter: float = 0.0, phase: float = 0.0,
+              star=None) -> bool:
+        """Walk a closed polyline at constant speed; True if it fired."""
+        detector = star if star is not None else petting.Star()
+        lengths = [math.hypot(points[i + 1][0] - points[i][0],
+                              points[i + 1][1] - points[i][1])
+                   for i in range(len(points) - 1)]
+        speed = sum(lengths) / seconds
+        moment = phase
+        while moment < seconds:
+            wanted, walked, spot = speed * moment, 0.0, None
+            for index, length in enumerate(lengths):
+                if walked + length >= wanted:
+                    along = (wanted - walked) / length
+                    spot = (points[index][0] + along * (points[index + 1][0] - points[index][0]),
+                            points[index][1] + along * (points[index + 1][1] - points[index][1]))
+                    break
+                walked += length
+            if spot is None:
+                break
+            x, y = spot
+            if jitter:
+                x += math.sin(moment * 37) * jitter
+                y += math.cos(moment * 41) * jitter
+            if detector.feed(int(x), moment, int(y)):
+                return True
+            moment += 0.05
+        return False
+
+    def pentagram(radius: int = 140, skew: float = 1.0):
+        points = [(700 + radius * math.cos(math.radians(-90 + 144 * i)) * skew,
+                   500 + radius * math.sin(math.radians(-90 + 144 * i)))
+                  for i in range(5)]
+        return points + [points[0]]
+
+    def polygon(sides: int, radius: int = 140):
+        points = [(700 + radius * math.cos(2 * math.pi * i / sides),
+                   500 + radius * math.sin(2 * math.pi * i / sides))
+                  for i in range(sides)]
+        return points + [points[0]]
+
+    def ring(radius: int = 140):
+        return [(700 + radius * math.cos(2 * math.pi * i / 60),
+                 500 + radius * math.sin(2 * math.pi * i / 60)) for i in range(61)]
+
+    results = []
+    for seconds in (0.8, 1.2, 1.8, 2.4):
+        for phase in (0.0, 0.017, 0.033):
+            results.append((f"a star drawn in {seconds}s is one (offset {phase:.3f})",
+                            trace(pentagram(), seconds, phase=phase)))
+    results.append(("a wobbly lopsided star still is",
+                    trace(pentagram(skew=0.8), 1.5, jitter=6)))
+    results.append(("a small one does too", trace(pentagram(radius=70), 1.2)))
+
+    # Five points, but only four corners are ever seen: the closing edge ends
+    # where the drawing started rather than carrying on through it. Asking for
+    # five would mean asking for something that never arrives -- which is only
+    # obvious once counted.
+    counter = petting.Star(corners=99, seconds=10.0)
+    trace(pentagram(), 1.5, star=counter)
+    results.append((f"five points draw four corners ({counter.corners})",
+                    counter.corners == 4))
+    results.append(("...which is what is asked for", petting.STAR_CORNERS == 4))
+
+    # The shapes it must not be. A circle is the one that matters, since a
+    # circle already means something else.
+    for seconds in (0.6, 1.0, 2.5):
+        results.append((f"a circle drawn in {seconds}s is not a star",
+                        not trace(ring(), seconds)))
+    for sides, name in ((3, "triangle"), (4, "square"), (6, "hexagon"), (8, "octagon")):
+        results.append((f"a {name} is not a star", not trace(polygon(sides), 1.5)))
+    results.append(("a zigzag is not a star",
+                    not trace([(500 + i * 90, 500 + (i % 2) * 160) for i in range(8)], 1.5)))
+    results.append(("a straight line is not a star",
+                    not trace([(400, 500), (1200, 500)], 1.0)))
+
+    # Too small to be meant, and too slow to be one gesture.
+    results.append(("a tiny star is not a summons to anywhere",
+                    not trace(pentagram(radius=25), 1.0)))
+    results.append(("one dawdled over is not either",
+                    not trace(pentagram(), petting.STAR_SECONDS + 3.0)))
+
+    # A star gets longer than a circle does, being more drawing.
+    results.append(("a star is allowed longer than a circle",
+                    petting.STAR_SECONDS > petting.CALL_SECONDS))
+    # And it must not also read as a circle, or the pet would walk over as
+    # well as appear.
+    circle_too = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
+                                one_way=True, seconds=petting.CALL_SECONDS)
+    results.append(("...and does not read as a circle as well",
+                    not trace(pentagram(), 1.2, star=circle_too)))
+    return results
+
+
 def rejects() -> list[tuple[str, bool]]:
     """The half that matters more: things that must never read as affection."""
     results = []
@@ -319,7 +425,8 @@ def main() -> int:
     failures = 0
     total = 0
     for label, results in (("triggers", triggers()), ("directions", directions()),
-                            ("summons", summons()), ("rejects", rejects())):
+                            ("summons", summons()), ("stars", stars()),
+                            ("rejects", rejects())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

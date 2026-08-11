@@ -36,6 +36,10 @@ class Session:
         os.environ["XDG_SESSION_TYPE"] = self.session_type
         pointer._query_child = lambda: self.child
         pointer.from_shell = lambda: self.shell
+        # One reading is cached and shared between the gesture poll and the
+        # walk loop, so a test that did not clear it would be checking the
+        # previous case's answer.
+        pointer.forget()
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -125,11 +129,57 @@ def fallback_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def sharing_checks() -> list[tuple[str, bool]]:
+    """One reading serves both callers, and repeats say so.
+
+    The gesture poll wants the pointer every 50ms and the walk loop sixty
+    times a second, and on the bridge path every reading is a round trip into
+    the compositor. Asking for each was reported twice over: a circle drawn
+    over a Wayland window going unrecognised, and a pet stopping partway
+    through an errand.
+
+    Which makes the `fresh` flag load-bearing rather than decorative --
+    whether the pointer has settled is judged from consecutive readings, and
+    a reused one would say it had stopped moving when it had not.
+    """
+    results = []
+    asked = []
+
+    def raw():
+        asked.append(1)
+        return (100 + 10 * len(asked), 200)
+
+    with Session("wayland", 8400340):
+        first, fresh_first = pointer.sample(raw)
+        second, fresh_second = pointer.sample(raw)
+        results.append(("the first reading is taken", fresh_first))
+        results.append(("...and the second is the same one reused", not fresh_second))
+        results.append(("...with the same answer", first == second))
+        results.append((f"...having asked once, not twice ({len(asked)}x)", len(asked) == 1))
+
+    with Session("wayland", 8400340):
+        results.append(("clearing it makes the next ask go and look",
+                        pointer.sample(raw)[1]))
+
+    # A reading nobody can vouch for is not cached and repeated -- that would
+    # be the frozen coordinate this module exists to refuse, dressed up as a
+    # fresh one.
+    with Session("wayland", 0, shell=None):
+        results.append(("nothing is cached when nobody can say",
+                        pointer.sample(raw) == (None, False)))
+
+    results.append(("the reading is short-lived", 0 < pointer.SAMPLE_SECONDS <= 0.05))
+    # The walk loop runs every 16ms and cannot afford to wait on the shell.
+    results.append(("the bridge is not waited on for long",
+                    pointer.BRIDGE_TIMEOUT_MS <= 80))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
     for label, results in (("wayland", wayland_checks()), ("x11", x11_checks()),
-                            ("fallback", fallback_checks())):
+                            ("fallback", fallback_checks()), ("sharing", sharing_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

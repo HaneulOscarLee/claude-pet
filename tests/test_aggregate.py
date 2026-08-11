@@ -26,12 +26,12 @@ def claude_running(answer: bool):
     whether a Claude process happens to exist -- which passes on a developer's
     machine and fails in CI.
     """
-    original = state.any_claude_running
-    state.any_claude_running = lambda: answer
+    original = state.any_agent_running
+    state.any_agent_running = lambda: answer
     try:
         yield
     finally:
-        state.any_claude_running = original
+        state.any_agent_running = original
 
 
 def session(name: str, age_seconds: float) -> dict:
@@ -117,7 +117,35 @@ def liveness_checks() -> list[tuple[str, bool]]:
 
     # The real sweep must answer without raising. Whether it finds anything
     # depends on the machine, so that is deliberately not asserted.
-    results.append(("real sweep returns a bool", isinstance(state.any_claude_running(), bool)))
+    results.append(("real sweep returns a bool", isinstance(state.any_agent_running(), bool)))
+
+    # It asked for a Claude process for as long as Claude was the only agent,
+    # and stayed that way once Codex and Gemini arrived -- so on a machine
+    # running Codex and no Claude every pid-less session was judged dead the
+    # moment it was written, and the pet never noticed Codex at all.
+    from claude_pet import agents as agent_registry
+
+    watched = {spec["comm"] for spec in agent_registry.AGENTS.values() if spec.get("comm")}
+    results.append((f"the sweep looks for every agent ({', '.join(sorted(watched))})",
+                    {"claude", "codex", "node"} <= watched))
+
+    # And the pid check, which has the same shape: an entry carrying a pid but
+    # no agent used to be compared against the name "claude" alone.
+    live = os.getpid()
+    mine = state._comm_of(live)
+    for agent in ("codex", "gemini"):
+        spec = agent_registry.AGENTS[agent]
+        # Stands in for the real thing: whether this interpreter passes for the
+        # agent is beside the point, only that the agent is what gets asked.
+        entry = {"state": "running", "ts": NOW, "seen": NOW,
+                 "locator": {"claude_pid": live, "agent": agent}}
+        results.append((f"a {agent} session is judged as {agent}",
+                        state.is_alive(entry, NOW)
+                        == agent_registry.is_process(agent, live)))
+    results.append((f"...and a pid with no agent is not assumed to be claude (this is {mine!r})",
+                    state.is_alive({"state": "running", "ts": NOW, "seen": NOW,
+                                    "locator": {"claude_pid": live}}, NOW)
+                    == (mine in watched or mine == "claude")))
     return results
 
 

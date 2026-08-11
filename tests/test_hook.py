@@ -26,7 +26,7 @@ def run(events: list[tuple[str, dict]], session_id: str = "s") -> dict:
     """
     from claude_pet import hook, state
 
-    state.any_claude_running = lambda: True
+    state.any_agent_running = lambda: True
 
     for name, extra in events:
         payload = {"hook_event_name": name, "session_id": session_id, **extra}

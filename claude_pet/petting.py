@@ -100,6 +100,7 @@ class Stroke:
         span_pixels: int = 0,
         one_way: bool = False,
         seconds: float = 0.0,
+        roundness: float = CALL_ROUNDNESS,
     ) -> None:
         #: Stroking and summoning want different amounts of it. A rub gives
         #: half a turn per sweep and happens on a sprite barely a hundred
@@ -128,6 +129,9 @@ class Stroke:
         #: separating "drew a circle" from "went round eventually" was that
         #: no single pause exceeded the sample window.
         self.seconds = seconds
+        #: How round it has to be. An argument rather than the constant, so the
+        #: person it is wrong for can move it without editing the source.
+        self.roundness_wanted = roundness
         self.began = 0.0
         self.low_x = self.high_x = 0
         self.low_y = self.high_y = 0
@@ -251,7 +255,7 @@ class Stroke:
 
         span = max(self.high_x - self.low_x, self.high_y - self.low_y)
         turning = abs(self.turned_signed) if self.one_way else self.turned
-        round_enough = not self.span_pixels or self.roundness() >= CALL_ROUNDNESS
+        round_enough = not self.span_pixels or self.roundness() >= self.roundness_wanted
         if (
             turning < self.turn_radians
             or span < self.span_pixels
@@ -265,5 +269,153 @@ class Stroke:
         self.began = now
         self._forget_shape()
         self._remember_shape(x, y)
+        self.ready_at = now + COOLDOWN_SECONDS
+        return True
+
+
+#: Past this, a bend is the corner of a drawn shape rather than the curve of
+#: a hand going round. A star turns 144 degrees at every point, a square 90 --
+#: so this sits between them, near enough the square that a sloppy star still
+#: lands and far enough that a neat square does not.
+#:
+#: Accumulated over consecutive samples rather than measured on one. Measured
+#: on one it missed corners outright: a sample landing on the point splits its
+#: 144 degrees into two turns of 72, neither of which is a corner, and five
+#: points sampled every 50ms give that several chances to happen. Reported as
+#: the gesture simply not working.
+CORNER_RADIANS = 0.6 * math.pi
+
+#: Under this a step is going straight on, and whatever corner was being
+#: turned is over.
+#:
+#: This is also what separates a star from a circle, and the separation has to
+#: be structural rather than a matter of degree: a circle sampled coarsely
+#: turns 40 degrees a step and would accumulate a corner's worth every few
+#: samples. So a corner only counts if the pointer was travelling straight
+#: before it -- which a star does along every edge, and a circle never does.
+STRAIGHT_RADIANS = 0.16 * math.pi
+
+#: How many corners make a star. Five points means five corners; four is
+#: asked for so that one lost to a coarse sample does not lose the gesture.
+#: A triangle cannot reach it whatever its angles, which is the point.
+STAR_CORNERS = 4
+
+#: How big, across, and how long it may take. A star is more drawing than a
+#: circle is, so it gets longer -- but not all day, or any scribble
+#: eventually qualifies.
+STAR_SPAN_PIXELS = 120
+STAR_SECONDS = 2.5
+
+
+class Star:
+    """Recognises a star drawn in one stroke, for teleporting the pet to it.
+
+    A star is corners with straight edges between them; a circle is a curve.
+    That is the whole of how they are told apart. The pentagram {5/2} turns
+    144 degrees at each of its five points and always the same way round, so
+    the corners are counted, their direction has to agree, and each has to sit
+    between two straight runs.
+
+    Kept apart from `Stroke` rather than folded into it. Stroke fires on how
+    far the direction has turned in total, which is the right question for a
+    circle and says nothing useful about a star -- the same five corners come
+    to 720 degrees whether they are arranged as a star or as a scribble.
+    """
+
+    def __init__(
+        self,
+        corners: int = STAR_CORNERS,
+        span_pixels: int = STAR_SPAN_PIXELS,
+        seconds: float = STAR_SECONDS,
+    ) -> None:
+        self.corners_wanted = corners
+        self.span_pixels = span_pixels
+        self.seconds = seconds
+        self.x: int | None = None
+        self.y = 0
+        self.at = 0.0
+        self.began = 0.0
+        self.direction_x = 0.0
+        self.direction_y = 0.0
+        self.corners = 0
+        self.turn_sign = 0
+        #: The bend being turned right now, added up over however many samples
+        #: it takes, and whether the pointer went straight before it.
+        self.bend = 0.0
+        self.went_straight = False
+        self.low_x = self.high_x = 0
+        self.low_y = self.high_y = 0
+        self.ready_at = 0.0
+
+    def reset(self) -> None:
+        self.x = None
+        self.corners = 0
+        self.turn_sign = 0
+        self.bend = 0.0
+        self.went_straight = False
+        self.direction_x = self.direction_y = 0.0
+
+    def _restart(self, x: int, y: int, now: float) -> None:
+        self.corners = 0
+        self.turn_sign = 0
+        self.bend = 0.0
+        self.went_straight = False
+        self.began = now
+        self.low_x = self.high_x = x
+        self.low_y = self.high_y = y
+
+    def _corner(self, sign: int) -> None:
+        """Record a corner, or start again if it turned the other way."""
+        if self.turn_sign and sign != self.turn_sign:
+            # A corner the other way is a zigzag, not a star. Count from this
+            # one rather than discarding it: it may be the first of the star
+            # being drawn now.
+            self.corners = 1
+        else:
+            self.corners += 1
+        self.turn_sign = sign
+        self.bend = 0.0
+        self.went_straight = False
+
+    def feed(self, x: int, now: float, y: int = 0) -> bool:
+        """Feed a pointer position; True on the moment a star completes."""
+        if self.x is None:
+            self.x, self.y, self.at = x, y, now
+            self._restart(x, y, now)
+            return False
+
+        travelled_x, travelled_y = x - self.x, y - self.y
+        if math.hypot(travelled_x, travelled_y) < STROKE_PIXELS:
+            return False
+
+        if now - self.at > WINDOW_SECONDS or now - self.began > self.seconds:
+            self._restart(x, y, now)
+        self.low_x, self.high_x = min(self.low_x, x), max(self.high_x, x)
+        self.low_y, self.high_y = min(self.low_y, y), max(self.high_y, y)
+
+        if self.direction_x or self.direction_y:
+            angle = math.atan2(
+                self.direction_x * travelled_y - self.direction_y * travelled_x,
+                self.direction_x * travelled_x + self.direction_y * travelled_y,
+            )
+            if abs(angle) < STRAIGHT_RADIANS:
+                self.bend = 0.0
+                self.went_straight = True
+            else:
+                sign = 1 if angle > 0 else -1
+                self.bend = angle if self.bend * angle < 0 else self.bend + angle
+                if abs(self.bend) >= CORNER_RADIANS and self.went_straight:
+                    self._corner(sign)
+        self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
+        self.x, self.y, self.at = x, y, now
+
+        span = max(self.high_x - self.low_x, self.high_y - self.low_y)
+        if (
+            self.corners < self.corners_wanted
+            or span < self.span_pixels
+            or now < self.ready_at
+        ):
+            return False
+        self._restart(x, y, now)
         self.ready_at = now + COOLDOWN_SECONDS
         return True
