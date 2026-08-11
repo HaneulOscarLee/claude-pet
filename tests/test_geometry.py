@@ -68,6 +68,25 @@ class Placer:
             for a in self.monitors
         )
 
+    def span(self) -> tuple[int, int, int, int]:
+        return (
+            min(a.x for a in self.monitors) + EDGE_MARGIN,
+            min(a.y for a in self.monitors),
+            max(a.x + a.width for a in self.monitors) - EDGE_MARGIN - SPRITE_W,
+            max(a.y + a.height for a in self.monitors) - EDGE_MARGIN - SPRITE_H,
+        )
+
+    def place_across(self, x: int, y: int) -> tuple[int, int]:
+        """Placement for something crossing between screens, not staying on one."""
+        area = self.workarea_for(x, y)
+        left, top, right, bottom = self.span()
+        x = min(max(x, left), right)
+        y = min(max(y, top), bottom)
+        self.bubble_below = y - area.y < BUBBLE_SPACE
+        self.sprite_top = 0 if self.bubble_below else BUBBLE_SPACE
+        self.pos_x, self.pos_y = x - SPRITE_LEFT, y - self.sprite_top
+        return x, y
+
     def place(self, x: int, y: int) -> tuple[int, int]:
         area = self.workarea_for(x, y)
         x = min(max(x, area.x), area.x + area.width - SPRITE_W)
@@ -135,10 +154,103 @@ def monitor_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def errand_checks() -> list[tuple[str, bool]]:
+    """A pet called across the seam has to actually get there.
+
+    Reported as the pointer appearing to stop at the join: with the pet on
+    the second screen and the pointer moved to the first, the pet behaved as
+    though the pointer had stayed where it crossed. Nothing was wrong with
+    reading the pointer -- the bounds were. To count as being on the first
+    screen the sprite's centre must pass the seam, and the second screen's
+    own bounds forbid exactly that, so it walks up to the join and stops.
+    """
+    results = []
+
+    def walk(placer: Placer, across: bool, start: tuple[int, int],
+             pointer: tuple[int, int], seconds: float = 90.0,
+             aim_across: bool | None = None):
+        """Run the errand arithmetic.
+
+        Returns where it ended, how far left it got, and how long it spent
+        pinned against the seam -- which is the symptom, the pet behaving as
+        though the pointer had stopped where it crossed.
+        """
+        speed = 3 * 10 * 2.0        # walk_speed x fps x CALL_PACE, the shipped default
+        tick = 0.016
+        x, y = start
+        at = (float(x), float(y))
+        west = x
+        elapsed = 0.0
+        pinned = 0.0
+        while elapsed < seconds:
+            target_x, target_y = pointer[0] - SPRITE_W // 2, pointer[1] - SPRITE_H // 2
+            if aim_across if aim_across is not None else across:
+                left, top, right, bottom = placer.span()
+            else:
+                # What it used to aim at: the bounds of its own screen, which
+                # put the target on the seam and no further.
+                own = placer.workarea_for(x, y)
+                left, top = own.x, own.y
+                right, bottom = own.x + own.width - SPRITE_W, own.y + own.height - SPRITE_H
+            target_x = min(max(target_x, left), right)
+            target_y = min(max(target_y, top), bottom)
+            remaining_x, remaining_y = target_x - x, target_y - y
+            distance = math.hypot(remaining_x, remaining_y)
+            if distance <= SPRITE_W / 2 + 8:
+                break
+            step = speed * tick
+            if math.hypot(at[0] - x, at[1] - y) > WINDOW_W:
+                at = (float(x), float(y))
+            at = (at[0] + step * remaining_x / distance, at[1] + step * remaining_y / distance)
+            put = placer.place_across if across else placer.place
+            x, y = put(int(round(at[0])), int(round(at[1])))
+            west = min(west, x)
+            if abs(x - SECOND.x) <= 4:
+                pinned += tick
+            elapsed += tick
+        return x, y, west, pinned
+
+    placer = Placer([PRIMARY, SECOND])
+    # Deep on the second screen, called to the far side of the first.
+    x, _y, west, pinned = walk(placer, True, (3400, 500), (700, 500))
+    results.append(("a pet called across the seam arrives", abs(x - (700 - SPRITE_W // 2)) <= 70))
+    results.append(("...having crossed onto the first screen", west < SECOND.x))
+    results.append((f"...without stalling at the join ({pinned:.1f}s)", pinned < 0.5))
+
+    # And the other way, which always worked -- stated so both are pinned.
+    x, _y, _west, _pinned = walk(placer, True, (400, 500), (3000, 500))
+    results.append(("and one called the other way arrives too",
+                    abs(x - (3000 - SPRITE_W // 2)) <= 70))
+
+    # The behaviour that was reported, kept here so the fix cannot quietly
+    # come undone: clamped to its own screen, it stops dead at the join.
+    # Aiming at its own screen's bounds: the target lands on the seam, the pet
+    # walks to it and stops -- indistinguishable from the pointer having
+    # stopped there, which is how it was described.
+    halted_x, _y, _west, _pinned = walk(placer, False, (3400, 500), (700, 500), seconds=30.0)
+    results.append(("aimed at its own screen it halts on the seam",
+                    abs(halted_x - SECOND.x) <= SPRITE_W))
+
+    # And placement alone, aiming correctly: it crosses, but only after
+    # grinding against the join for about a second.
+    _x, _y, _west, stalled = walk(placer, False, (3400, 500), (700, 500),
+                                  seconds=30.0, aim_across=True)
+    results.append((f"clamped to one screen it stalls at the join ({stalled:.1f}s)",
+                    stalled > 0.8))
+
+    # The union has to reach both screens, or the target is clamped away
+    # before the walk even starts.
+    left, _top, right, _bottom = placer.span()
+    results.append(("the crossing bounds span both screens",
+                    left < SECOND.x and right > SECOND.x))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("top edge", top_checks()), ("monitors", monitor_checks())):
+    for label, results in (("top edge", top_checks()), ("monitors", monitor_checks()),
+                            ("errands", errand_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1
