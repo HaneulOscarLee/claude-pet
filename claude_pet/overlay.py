@@ -31,7 +31,7 @@ for _namespace, _version in (
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
-from . import config, desktop, jump, petting, sprites, state, tray  # noqa: E402
+from . import config, desktop, jump, motion, petting, sprites, state, tray  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
@@ -90,6 +90,9 @@ LABELS: dict[str, dict[str, str]] = {
         "waving": "session started",
         "menu.walk": "Wander around",
         "menu.petting": "Enjoy being petted",
+        "menu.throwing": "Can be thrown",
+        "menu.call": "Come when waved at",
+        "menu.come": "Come here",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
         "menu.desktop": "Follow Claude Desktop",
@@ -129,6 +132,9 @@ LABELS: dict[str, dict[str, str]] = {
         "waving": "세션 시작",
         "menu.walk": "돌아다니기",
         "menu.petting": "쓰담쓰담 받기",
+        "menu.throwing": "던지기 허용",
+        "menu.call": "부르면 오기",
+        "menu.come": "이리 와",
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
         "menu.desktop": "Claude Desktop 연동",
@@ -247,6 +253,24 @@ JUMPABLE = {"waiting", "review", "failed"}
 #: Pointer travel, in pixels, that turns a click into a drag.
 DRAG_THRESHOLD = 5
 
+#: How far from the screen edge the pet keeps, when anchored and while
+#: wandering. Enough that it does not look wedged against the side.
+EDGE_MARGIN = 12
+
+#: How often the pointer is read while watching for a summons. The look-at-
+#: mouse poll already does this once a frame, but only while idle; calling
+#: has to work whatever the agents are doing, so it gets its own slower one.
+CALL_POLL_SECONDS = 0.2
+
+#: How near the pointer counts as arrived. Standing under it would put the
+#: sprite between you and whatever you were about to click.
+CALL_ARRIVAL_PIXELS = 40
+
+#: How fast it comes, in pixels per second. A wander is a tenth of this;
+#: at that pace crossing a screen took twenty seconds, which reads as the
+#: pet ignoring you rather than answering.
+CALL_SPEED = 420.0
+
 #: Set CLAUDE_PET_DEBUG=1 to trace menu dismissal decisions. The signals here
 #: differ between X11 and Wayland surfaces and cannot be reasoned about from the
 #: outside, so this stays available rather than being guesswork each time.
@@ -364,8 +388,18 @@ class Overlay(Gtk.Window):
         #: Offset from the pointer to the sprite's corner, held during a drag.
         self.drag_offset: tuple[int, int] | None = None
 
-        #: Recognises the back-and-forth of a hovering pointer.
+        #: Recognises the back-and-forth of a hovering pointer -- over the
+        #: pet it means affection, away from it means come here.
         self.stroke = petting.Stroke()
+        self.call_stroke = petting.Stroke()
+        self.called_at = 0.0
+        self.pointer_checked_at = 0.0
+        #: The tail of a drag, and the throw it may have ended in.
+        self.flick = motion.Flick()
+        self.throw: motion.Throw | None = None
+        self.thrown_at = 0.0
+        #: Sprite x to walk to, when called. None means wander as usual.
+        self.walk_target: int | None = None
         self.petted_count = int(settings.get("petted_count") or 0)
         self.phrases_petted = resolve_petted(language)
 
@@ -966,10 +1000,18 @@ class Overlay(Gtk.Window):
             self.visual_return = None
             self.frame_index = 0
 
-        if self.state == "idle" and self.visual_until is None:
+        # A throw and an errand outrank wandering, and unlike wandering they
+        # happen whatever the agents are doing: being called is a thing you
+        # asked for, and it would be odd to be ignored because Claude is busy.
+        if self.throw is not None:
+            self._advance_throw(now)
+        elif self.walk_target is not None:
+            self._advance_errand()
+        elif self.state == "idle" and self.visual_until is None:
             self._update_walk(now)
         elif self.walking:
             self.walking = 0
+        self._listen_for_a_call(now)
 
         frames = self.view.frames(self.visual_state)
         self.frame_index = (self.frame_index + 1) % max(1, len(frames))
@@ -1015,6 +1057,125 @@ class Overlay(Gtk.Window):
             self.walking *= -1
             self.visual_state = "running-right" if self.walking > 0 else "running-left"
         self._place_sprite(min(max(new_x, left_bound), right_bound), self.sprite_y)
+
+    # -------------------------------------------------------- throw and call
+
+    def _advance_throw(self, now: float) -> None:
+        """Carry a thrown pet along until it runs out of speed."""
+        area = self._workarea()
+        bounds = (
+            area.x + EDGE_MARGIN,
+            area.y,
+            area.x + area.width - EDGE_MARGIN - self.view.width,
+            area.y + area.height - EDGE_MARGIN - self.view.height,
+        )
+        elapsed = max(0.001, min(0.2, now - self.thrown_at))
+        self.thrown_at = now
+
+        x, y = self.throw.step(self.sprite_x, self.sprite_y, bounds, elapsed)
+        self._place_sprite(int(round(x)), int(round(y)))
+
+        if self.throw.moving:
+            # `jumping` reads as airborne; the walking rows would look like it
+            # was strolling through the air.
+            self.visual_state = "jumping" if self.view.animations.get("jumping") else "idle"
+            return
+
+        self.throw = None
+        self.visual_state = "idle"
+        self.frame_index = 0
+        self.settings["position"] = [self.pos_x, self.pos_y]
+        config.update(position=self.settings["position"])
+        self._halt_walk(pause=1.0)
+
+    def _advance_errand(self) -> None:
+        """Walk toward wherever it was called to, then stop just short."""
+        target = self.walk_target
+        area = self._workarea()
+        target = min(max(int(target), area.x + EDGE_MARGIN),
+                     area.x + area.width - EDGE_MARGIN - self.view.width)
+        remaining = target - self.sprite_x
+
+        # Stopping short: standing under the pointer would put the sprite
+        # between you and whatever you were about to click.
+        if abs(remaining) <= max(self.view.width, CALL_ARRIVAL_PIXELS):
+            self.walk_target = None
+            self.walking = 0
+            self.visual_state = "idle"
+            self.frame_index = 0
+            self._react("waving")
+            self.settings["position"] = [self.pos_x, self.pos_y]
+            config.update(position=self.settings["position"])
+            return
+
+        direction = 1 if remaining > 0 else -1
+        # Deliberately quicker than a wander, and in pixels per second so
+        # that the animation rate -- a user setting -- does not decide how
+        # fast the pet answers.
+        fps = max(1, int(self.settings.get("fps") or 10))
+        step = max(1, int(CALL_SPEED / fps))
+        self.walking = direction
+        self.visual_state = "running-right" if direction > 0 else "running-left"
+        self._place_sprite(self.sprite_x + step * direction, self.sprite_y)
+
+    def _pointer_position(self) -> tuple[int, int] | None:
+        display = Gdk.Display.get_default()
+        seat = display.get_default_seat() if display else None
+        pointer = seat.get_pointer() if seat else None
+        if pointer is None:
+            return None
+        _screen, x, y = pointer.get_position()
+        return int(x), int(y)
+
+    def _listen_for_a_call(self, now: float) -> None:
+        """Watch the pointer, anywhere on screen, for being waved at.
+
+        A keyboard shortcut would be the obvious way to call a pet, and is not
+        available: global shortcuts need a desktop portal this Wayland session
+        does not provide, and the window refuses focus on purpose so that an
+        always-on-top pet never swallows a keystroke. The pointer, though, can
+        be read wherever it is -- which is already how a v2 pack watches where
+        to look.
+
+        So the gesture is the petting one, moved: rubbing *on* the pet is
+        affection, waving *away from* it is a summons. Same detector, and the
+        same reason it is a wave rather than a pause -- a resting pointer is
+        someone reading, and a pet that came every time you stopped to read
+        would be unbearable.
+        """
+        if not self.settings.get("call", True) or self.dragging or self.throw is not None:
+            return
+        if now - self.pointer_checked_at < CALL_POLL_SECONDS:
+            return
+        self.pointer_checked_at = now
+
+        position = self._pointer_position()
+        if position is None:
+            return
+        x, y = position
+
+        centre_x = self.sprite_x + self.view.width / 2
+        centre_y = self.sprite_y + self.view.height / 2
+        if math.hypot(x - centre_x, y - centre_y) < self.view.width * 2:
+            # Close enough that this is stroking, not calling. Handing it to
+            # the other detector as well would have one gesture mean both.
+            self.call_stroke.reset()
+            return
+
+        if self.call_stroke.feed(x, now):
+            self.come_here(x)
+
+    def come_here(self, x: int | None = None) -> None:
+        """Send the pet to the pointer, or to a given x."""
+        if x is None:
+            position = self._pointer_position()
+            if position is None:
+                return
+            x = position[0]
+        self.throw = None
+        self.walk_target = int(x) - self.view.width // 2
+        self.called_at = time.monotonic()
+        trace(f"called to x={x}")
 
     def _update_look(self) -> None:
         """Face the pointer while idle, using the v2 look sweep."""
@@ -1208,12 +1369,14 @@ class Overlay(Gtk.Window):
             self.dragging = True
             self.drag_offset = (int(start_x) - self.sprite_x, int(start_y) - self.sprite_y)
             self.stroke.reset()
+            self.flick.clear()
             # Widen the target while dragging: the sprite is a small thing to
             # keep a pointer inside, and losing it mid-drag drops the pet.
             self._apply_input_shape()
 
         offset_x, offset_y = self.drag_offset or (0, 0)
         self._place_sprite(int(event.x_root) - offset_x, int(event.y_root) - offset_y)
+        self.flick.record(event.x_root, event.y_root, time.monotonic())
         return True
 
     def _on_button_release(self, _widget, event) -> bool:
@@ -1231,6 +1394,17 @@ class Overlay(Gtk.Window):
         self.drag_offset = None
         self._apply_input_shape()
         self._halt_walk()  # settle where it was dropped before wandering on
+
+        # Let go slowly and the pet stays where it was put; flick it and it
+        # keeps going. Speed at the moment of release is the whole
+        # difference, which is why only the tail of the drag is measured.
+        thrown = self.flick.release() if self.settings.get("throwing", True) else None
+        self.flick.clear()
+        if thrown is not None:
+            self.throw = thrown
+            self.thrown_at = time.monotonic()
+            self.walk_target = None
+            return  # position is saved where it lands, not where it left
         # Stored as the window corner, which is what earlier versions wrote and
         # what `_place_initial` still reads.
         self.settings["position"] = [self.pos_x, self.pos_y]
@@ -1395,6 +1569,8 @@ class Overlay(Gtk.Window):
         toggles = [
             ("walk", self.labels["menu.walk"], True),
             ("petting", self.labels["menu.petting"], True),
+            ("throwing", self.labels["menu.throwing"], True),
+            ("call", self.labels["menu.call"], True),
             ("notifications", self.labels["menu.notify"], False),
             ("autostart", self.labels["menu.autostart"], True),
             ("exit_when_no_sessions", self.labels["menu.exit_idle"], True),
@@ -1412,6 +1588,7 @@ class Overlay(Gtk.Window):
             ("separator",),
             # High up in both, because it is what you reach for when the pet is
             # somewhere you cannot get at it.
+            ("action", self.labels["menu.come"], self.come_here),
             ("action", self.labels["menu.reset"], self.reset_position),
             ("separator",),
             *[("toggle", key, label, default) for key, label, default in toggles],

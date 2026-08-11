@@ -21,6 +21,8 @@ DEFAULTS: dict[str, Any] = {
     "bubble": "active",   # when to show the bubble: active | alerts | never
     "look_at_mouse": True,  # v2 packs only: face the pointer while idle
     "petting": True,      # react to being stroked with the pointer
+    "throwing": True,     # a fast flick sends it sliding
+    "call": True,         # wave the pointer at it and it walks over
     "petted_count": 0,    # how many times it has been, kept across restarts
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background

@@ -588,6 +588,8 @@ so this is how you get a picture of the window.
 | click | **jump to that session** (see below), or pin the bubble if there is nowhere to jump |
 | drag | move the pet — mid-stride is fine; it stops the moment you grab it |
 | hover and rub back and forth | pet it |
+| flick it while dragging | throw it — it slides and bounces off the edges |
+| wave the pointer at it, from across the screen | it walks over |
 | right-click | everything below, without a terminal |
 
 Drag it anywhere on any screen, right up to the top edge: the pet keeps the
@@ -604,6 +606,20 @@ once per rub rather than once per sweep. Being petted is deliberately *not* a
 state: the states belong to what your agents are doing, and a pet reporting
 `waving` because it was tickled would be lying about the thing it exists to
 report. Turn it off with **Enjoy being petted** in the menu.
+
+**Throwing** takes a deliberate flick. An ordinary drag across the screen —
+even a brisk one — puts the pet down where you let go; only the speed in the
+last tenth of a second decides, and the bar is set high, because guessing
+wrong moves the pet somewhere you did not put it.
+
+**Calling it** is the petting gesture done from a distance: wave the pointer
+back and forth anywhere on screen and the pet walks over, stopping short so
+it is not sitting on whatever you were about to click. A keyboard shortcut
+would be the obvious way and is not available — global shortcuts need a
+desktop portal this Wayland session does not provide, and the window refuses
+focus on purpose so an always-on-top pet never swallows a keystroke. The
+pointer can be read wherever it is, which is already how a v2 pack knows
+where to look. **Come here** is in the menu for the deliberate version.
 
 The right-click menu covers day-to-day use on its own: switch pack, browse the
 gallery, install a pet (paste its id or just its gallery link), remove the

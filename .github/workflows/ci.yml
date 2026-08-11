@@ -53,6 +53,10 @@ jobs:
       - name: Petting tests
         run: python3 tests/test_petting.py
 
+      # Throw physics: it must always come to rest, and on screen.
+      - name: Motion tests
+        run: python3 tests/test_motion.py
+
       # Which interpreter the launcher picks, with stand-ins on PATH.
       - name: Launcher tests
         run: python3 tests/test_launcher.py
@@ -77,6 +81,12 @@ jobs:
       # namespaces, and getting one wrong stops the pet from ever appearing.
       - name: Overlay imports under a virtual display
         run: xvfb-run -a python3 -c "import claude_pet.overlay; print('overlay ok')"
+
+      # Importing is not enough: a deleted constant shipped in three
+      # releases because the only code touching it places a pet with no
+      # saved position and walks one that wanders. This drives both.
+      - name: Overlay smoke test
+        run: xvfb-run -a python3 tests/test_overlay_smoke.py
 
       - name: CLI runs
         run: |
