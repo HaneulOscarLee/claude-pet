@@ -153,6 +153,57 @@ def summons() -> list[tuple[str, bool]]:
     for across, down in ((400, 120), (500, 80), (600, 50), (120, 500), (300, 150)):
         results.append((f"a {across}x{down} sliver is not a summons",
                         not ellipse(across, down)))
+
+    # Turned on its side. Reported as working -- a sliver drawn cornerwise
+    # summoned the pet -- because roundness compared the bounding box, and
+    # the box round a 400x120 ellipse at 45 degrees is 294x294, a perfect
+    # square. The shape is now measured through its own axes instead.
+    def turned(across: int, down: int, degrees: float, seconds: float = 2.0) -> bool:
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS,
+                                one_way=True, seconds=petting.CALL_SECONDS)
+        angle_offset = math.radians(degrees)
+        moment = 0.0
+        while moment < seconds:
+            angle = 2 * math.pi * moment / 0.35
+            flat_x, flat_y = across / 2 * math.cos(angle), down / 2 * math.sin(angle)
+            x = 900 + flat_x * math.cos(angle_offset) - flat_y * math.sin(angle_offset)
+            y = 500 + flat_x * math.sin(angle_offset) + flat_y * math.cos(angle_offset)
+            if stroke.feed(int(x), moment, int(y)):
+                return True
+            moment += 0.05
+        return False
+
+    for degrees in (30, 45, 60, 135):
+        results.append((f"a sliver turned {degrees} degrees is not a summons either",
+                        not turned(400, 120, degrees)))
+    for degrees in (0, 45, 90):
+        results.append((f"a real oval turned {degrees} degrees still is",
+                        turned(240, 180, degrees)))
+
+    # The measure itself, stated directly: it must not care which way up the
+    # screen is, which is the whole of what went wrong.
+    def shape_of(across: int, down: int, degrees: float) -> float:
+        stroke = petting.Stroke()
+        angle_offset = math.radians(degrees)
+        for step in range(24):
+            angle = 2 * math.pi * step / 24
+            flat_x, flat_y = across / 2 * math.cos(angle), down / 2 * math.sin(angle)
+            stroke.feed(int(900 + flat_x * math.cos(angle_offset)
+                             - flat_y * math.sin(angle_offset)), step * 0.02,
+                        int(500 + flat_x * math.sin(angle_offset)
+                            + flat_y * math.cos(angle_offset)))
+        return stroke.roundness()
+
+    flat = shape_of(400, 120, 0)
+    cornerwise = shape_of(400, 120, 45)
+    results.append((f"roundness ignores rotation ({flat:.2f} flat, {cornerwise:.2f} at 45)",
+                    abs(flat - cornerwise) < 0.05))
+    results.append(("a circle scores near 1", shape_of(200, 200, 0) > 0.95))
+    results.append(("a sliver scores near 0", shape_of(400, 20, 30) < 0.15))
+    # What the bounding box would have said about that same sliver, which is
+    # why it was believed.
+    results.append(("...where the bounding box called it a circle",
+                    abs(shape_of(400, 120, 45) - 1.0) > 0.4))
     # Nobody draws a true circle freehand, so an oval still has to count.
     for across, down in ((180, 180), (240, 180), (300, 200)):
         results.append((f"a {across}x{down} oval is still a summons",

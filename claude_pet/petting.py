@@ -49,13 +49,19 @@ REVERSAL_RADIANS = 0.75 * math.pi
 #: to be deliberate.
 CALL_SPAN_PIXELS = 90
 
-#: How round it has to be: the shorter side of what was drawn, as a
-#: fraction of the longer.
+#: How round it has to be: the width of what was drawn across its narrow
+#: way, as a fraction of its width across the long way.
 #:
-#: Size alone was measured across the widest part, so a long thin loop --
-#: or a squiggle that happened to double back -- counted as a circle.
+#: Measured through the shape's own axes rather than the screen's. Comparing
+#: the bounding box did the job for a loop lying flat, and none at all for
+#: one lying at an angle: a 400x100 ellipse turned 45 degrees has a bounding
+#: box of 354x354, which is a perfect square, so the thinnest sliver drawn
+#: cornerwise scored full marks. The axes come out of the second moments of
+#: the points, which have no opinion about which way up the screen is.
+#:
 #: Nobody draws a true circle freehand, so there is room here, but not much:
-#: at three fifths a 300x180 oval still counts and a 300x150 one does not.
+#: at three fifths a 300x180 oval still counts and a 300x150 one does not,
+#: whichever way round either is turned.
 CALL_ROUNDNESS = 0.6
 
 #: How long the whole gesture may take, from the first turn to the last.
@@ -133,11 +139,50 @@ class Stroke:
         self.turned = 0.0
         self.turned_signed = 0.0
         self.ready_at = 0.0
+        self._forget_shape()
+
+    def _forget_shape(self) -> None:
+        """Start measuring the shape again from nothing."""
+        self.count = 0
+        self.sum_x = self.sum_y = 0.0
+        self.sum_xx = self.sum_yy = self.sum_xy = 0.0
+
+    def _remember_shape(self, x: int, y: int) -> None:
+        self.count += 1
+        self.sum_x += x
+        self.sum_y += y
+        self.sum_xx += float(x) * x
+        self.sum_yy += float(y) * y
+        self.sum_xy += float(x) * y
+
+    def roundness(self) -> float:
+        """How round what has been drawn is, from 0 (a line) to 1 (a circle).
+
+        The two second moments of the points along their own principal axes,
+        the shorter over the longer. Rotating the shape rotates the axes with
+        it and leaves the answer alone, which is the whole point: the
+        bounding box this replaced called a sliver drawn cornerwise a perfect
+        circle.
+        """
+        if self.count < 4:
+            return 0.0
+        count = self.count
+        mean_x, mean_y = self.sum_x / count, self.sum_y / count
+        var_x = self.sum_xx / count - mean_x * mean_x
+        var_y = self.sum_yy / count - mean_y * mean_y
+        covar = self.sum_xy / count - mean_x * mean_y
+        spread = math.sqrt(max(0.0, (var_x - var_y) ** 2 + 4 * covar * covar))
+        major = (var_x + var_y + spread) / 2
+        minor = (var_x + var_y - spread) / 2
+        if major <= 0:
+            return 0.0
+        return math.sqrt(max(0.0, minor) / major)
 
     def reset(self) -> None:
         """Forget the gesture in progress, when the pointer leaves or drags."""
         self.x = None
         self.began = 0.0
+        self._forget_shape()
         self.direction_x = 0.0
         self.direction_y = 0.0
         self.turned = self.turned_signed = 0.0
@@ -157,6 +202,8 @@ class Stroke:
             self.began = now
             self.low_x = self.high_x = x
             self.low_y = self.high_y = y
+            self._forget_shape()
+            self._remember_shape(x, y)
             return False
 
         travelled_x = x - self.x
@@ -178,8 +225,10 @@ class Stroke:
             self.low_x = self.high_x = x
             self.low_y = self.high_y = y
             self.began = now
+            self._forget_shape()
         self.low_x, self.high_x = min(self.low_x, x), max(self.high_x, x)
         self.low_y, self.high_y = min(self.low_y, y), max(self.high_y, y)
+        self._remember_shape(x, y)
         if self.direction_x or self.direction_y:
             # The angle between one movement and the next, added up. A rub
             # turns half a circle every time it goes back; a circle turns a
@@ -200,11 +249,9 @@ class Stroke:
         self.direction_x, self.direction_y = float(travelled_x), float(travelled_y)
         self.x, self.y, self.at = x, y, now
 
-        wide = self.high_x - self.low_x
-        tall = self.high_y - self.low_y
-        span = max(wide, tall)
+        span = max(self.high_x - self.low_x, self.high_y - self.low_y)
         turning = abs(self.turned_signed) if self.one_way else self.turned
-        round_enough = not self.span_pixels or min(wide, tall) >= span * CALL_ROUNDNESS
+        round_enough = not self.span_pixels or self.roundness() >= CALL_ROUNDNESS
         if (
             turning < self.turn_radians
             or span < self.span_pixels
@@ -216,5 +263,7 @@ class Stroke:
         self.low_x = self.high_x = x
         self.low_y = self.high_y = y
         self.began = now
+        self._forget_shape()
+        self._remember_shape(x, y)
         self.ready_at = now + COOLDOWN_SECONDS
         return True

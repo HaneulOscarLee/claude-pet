@@ -625,7 +625,9 @@ no hand carries one round that fast; what is being asked for is a quick flick
 of a circle, not a slow sweep. Neither rule was there at first, and both had
 to be:
 a long thin loop is not a circle, so a squiggle that happened to double back
-summoned the pet, and with no limit on the pace a pointer that went round the
+summoned the pet — and roundness is judged through the shape's own axes, not
+the screen's, because a sliver drawn cornerwise has a perfectly square
+bounding box — and with no limit on the pace a pointer that went round the
 screen slowly over several seconds counted exactly as a deliberate circle
 did. Drawing one on purpose is a quick, round thing; that is the whole of
 what these two rules say.
