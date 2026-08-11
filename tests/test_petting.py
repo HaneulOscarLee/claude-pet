@@ -98,7 +98,7 @@ def summons() -> list[tuple[str, bool]]:
     import math
 
     def circle(radius: int, speed: float, seconds: float = 3.0) -> bool:
-        stroke = petting.Stroke(petting.CALL_TURN_RADIANS)
+        stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS)
         moment = 0.0
         turns_per_second = speed / (2 * math.pi * radius)
         while moment < seconds:
@@ -112,11 +112,23 @@ def summons() -> list[tuple[str, bool]]:
     results = [("a summons asks less than a rub",
                 petting.CALL_TURN_RADIANS < petting.TURN_RADIANS)]
     # Small, medium and large, each at a speed someone would actually draw it.
-    for radius, speed in ((25, 400), (100, 600), (250, 1200), (400, 2000)):
+    for radius, speed in ((60, 400), (100, 600), (250, 1200), (400, 2000)):
         results.append((f"a circle of radius {radius} is a summons", circle(radius, speed)))
     # A rub is still a rub: the stricter threshold is the default.
     results.append(("the default is still the stricter one",
                     petting.Stroke().turn_radians == petting.TURN_RADIANS))
+
+    # Turning alone says nothing about how big a thing was drawn, and a
+    # twirl of the wrist turns a full circle in no distance at all -- so the
+    # pet came for gestures far smaller than anyone meant to make.
+    for radius in (10, 20, 30):
+        results.append((f"a circle only {2 * radius}px across is not a summons",
+                        not circle(radius, 400)))
+    results.append(("...but a coin-sized one is", circle(45, 400)))
+
+    # Stroking asks for no minimum size: it happens on a sprite barely a
+    # hundred pixels wide, and could not ask for one.
+    results.append(("a rub has no size requirement", petting.Stroke().span_pixels == 0))
     return results
 
 

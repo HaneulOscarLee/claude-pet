@@ -294,6 +294,15 @@ CALL_ARRIVAL_PIXELS = 8
 #: there read as never having stopped at all.
 CALL_REST_SECONDS = 25.0
 
+#: How still the pointer must be before the pet counts as having arrived,
+#: in pixels of movement between one look and the next.
+#:
+#: Arrival was distance alone, and a pointer being moved about the screen
+#: passes near the pet on its way -- so the pet declared it had arrived at
+#: a cursor that was merely sweeping past, and gave up following. Coming to
+#: you means coming to where you stopped.
+CALL_SETTLED_PIXELS = 6
+
 #: How much brisker than a wander a summoned pet is.
 #:
 #: Barely: it is walking, not running. Making the speed depend on the
@@ -423,7 +432,7 @@ class Overlay(Gtk.Window):
         #: Recognises the back-and-forth of a hovering pointer -- over the
         #: pet it means affection, away from it means come here.
         self.stroke = petting.Stroke()
-        self.call_stroke = petting.Stroke(petting.CALL_TURN_RADIANS)
+        self.call_stroke = petting.Stroke(petting.CALL_TURN_RADIANS, petting.CALL_SPAN_PIXELS)
         self.called_at = 0.0
         self.pointer_checked_at = 0.0
         #: The tail of a drag, and the throw it may have ended in.
@@ -440,6 +449,10 @@ class Overlay(Gtk.Window):
         #: to whole pixels per axis rounds it to nothing: the pet stood
         #: still forever, having been told to move.
         self.errand_at: tuple[float, float] | None = None
+        #: Where the pointer was at the previous look, for telling a cursor
+        #: that has stopped from one that is passing through.
+        self.pointer_was: tuple[int, int] | None = None
+        self.pointer_settled = True
         self.petted_count = int(settings.get("petted_count") or 0)
         self.phrases_petted = resolve_petted(language)
 
@@ -1141,6 +1154,13 @@ class Overlay(Gtk.Window):
             # you used to be has answered a question nobody asked.
             here = self._pointer_position()
             if here is not None:
+                if self.pointer_was is not None:
+                    self.pointer_settled = (
+                        math.hypot(here[0] - self.pointer_was[0],
+                                   here[1] - self.pointer_was[1])
+                        <= CALL_SETTLED_PIXELS
+                    )
+                self.pointer_was = here
                 self.walk_target = (
                     here[0] - self.view.width // 2,
                     here[1] - self.view.height // 2,
@@ -1185,8 +1205,9 @@ class Overlay(Gtk.Window):
         # Beside the pointer rather than under it: the sprite swallows
         # clicks, so parking on the cursor would put the pet in the way of
         # whatever you called it over to look at.
-        if distance <= self.view.width / 2 + CALL_ARRIVAL_PIXELS:
+        if distance <= self.view.width / 2 + CALL_ARRIVAL_PIXELS and self.pointer_settled:
             self.walk_target = None
+            self.pointer_was = None
             self.errand_at = None
             self.walking = 0
             self.visual_state = "idle"
@@ -1217,7 +1238,12 @@ class Overlay(Gtk.Window):
         # Only left and right exist as poses, so the horizontal part of the
         # journey picks which one; a pack has nothing for walking upwards.
         self.visual_state = "running-right" if direction > 0 else "running-left"
-        if self.errand_at is None:
+        if self.errand_at is None or math.hypot(
+            self.errand_at[0] - self.sprite_x, self.errand_at[1] - self.sprite_y
+        ) > self.view.width:
+            # Resynced when they drift: placement clamps to the screen, and
+            # an accumulator that kept walking past a wall would leave the
+            # pet stuck against it, silently working off a debt of pixels.
             self.errand_at = (float(self.sprite_x), float(self.sprite_y))
         moved_x = self.errand_at[0] + step * remaining_x / distance
         moved_y = self.errand_at[1] + step * remaining_y / distance
@@ -1287,6 +1313,8 @@ class Overlay(Gtk.Window):
             int(y) - self.view.height // 2,
         )
         self.errand_at = None
+        self.pointer_was = None
+        self.pointer_settled = True
         self.called_at = time.monotonic()
         # Answer before setting off. Crossing a wide desk takes a moment
         # even at speed, and a gesture with no acknowledgement for a second

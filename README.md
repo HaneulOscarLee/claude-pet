@@ -615,8 +615,8 @@ not put it. Run `claude-pet run` with `CLAUDE_PET_DEBUG=1` and it prints the
 speed of every release, if you want to argue with the number.
 
 **Calling it** is the petting gesture done from a distance: wave the pointer
-anywhere on screen — in any direction, or draw a small circle — and the pet
-walks over, across monitors if it has to, stopping short so it is not sitting
+anywhere on screen — in any direction, or draw a circle about the size of a
+coin — and the pet walks over, across monitors if it has to, stopping short so it is not sitting
 on whatever you were about to click. Waving right beside the pet works too;
 only the sprite itself is excluded, since that is where stroking happens.
 
