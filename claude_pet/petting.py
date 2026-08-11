@@ -14,6 +14,8 @@ and reversals expire, so two turns a minute apart are not one gesture.
 
 from __future__ import annotations
 
+import math
+
 #: How far the pointer must travel before a movement counts as a stroke at all,
 #: rather than the hand shaking on a stationary mouse.
 STROKE_PIXELS = 8
@@ -38,36 +40,49 @@ class Stroke:
 
     def __init__(self) -> None:
         self.x: int | None = None
+        self.y = 0
         self.at = 0.0
-        self.direction = 0
+        self.direction_x = 0
+        self.direction_y = 0
         self.reversals = 0
         self.ready_at = 0.0
 
     def reset(self) -> None:
         """Forget the gesture in progress, when the pointer leaves or drags."""
         self.x = None
-        self.direction = 0
+        self.direction_x = 0
+        self.direction_y = 0
         self.reversals = 0
 
-    def feed(self, x: int, now: float) -> bool:
+    def feed(self, x: int, now: float, y: int = 0) -> bool:
+        """Feed a pointer position. `y` is optional; without it, x alone decides.
+
+        Direction is a vector, not a sign, so a gesture counts however it is
+        oriented. Watching only x meant waving up and down at the pet did
+        nothing at all -- which is not a thing anyone would guess was
+        deliberate, and several people wave that way.
+        """
         if self.x is None:
-            self.x, self.at = x, now
+            self.x, self.y, self.at = x, y, now
             return False
 
-        travelled = x - self.x
-        if abs(travelled) < STROKE_PIXELS:
+        travelled_x = x - self.x
+        travelled_y = y - self.y
+        if math.hypot(travelled_x, travelled_y) < STROKE_PIXELS:
             # Too small to mean anything. Deliberately does not update the
             # anchor: a slow drag across the sprite would otherwise never
             # accumulate enough travel to register at all.
             return False
 
-        direction = 1 if travelled > 0 else -1
         if now - self.at > WINDOW_SECONDS:
             self.reversals = 0  # whatever came before was a different gesture
-        if self.direction and direction != self.direction:
-            self.reversals += 1
-        self.direction = direction
-        self.x, self.at = x, now
+        # A reversal is a turn of more than a right angle, which is what going
+        # back looks like whichever way the gesture is aligned.
+        if self.direction_x or self.direction_y:
+            if travelled_x * self.direction_x + travelled_y * self.direction_y < 0:
+                self.reversals += 1
+        self.direction_x, self.direction_y = travelled_x, travelled_y
+        self.x, self.y, self.at = x, y, now
 
         if self.reversals < REVERSALS or now < self.ready_at:
             return False

@@ -51,6 +51,41 @@ def triggers() -> list[tuple[str, bool]]:
     return results
 
 
+def directions() -> list[tuple[str, bool]]:
+    """The gesture counts however it is oriented.
+
+    Reported as not working at all, and this was why: only horizontal movement
+    was measured, so waving up and down at the pet did nothing whatever --
+    which nobody would guess was deliberate, and plenty of people wave that
+    way.
+    """
+    import math
+
+    def wave(axis: str, seconds: float = 1.2, hz: float = 1.5, amplitude: int = 130) -> bool:
+        stroke = petting.Stroke()
+        moment = 0.0
+        while moment < seconds:
+            offset = amplitude * math.sin(2 * math.pi * hz * moment)
+            if axis == "x":
+                x, y = 600 + offset, 500
+            elif axis == "y":
+                x, y = 600, 500 + offset
+            else:
+                x, y = 600 + offset * 0.7, 500 + offset * 0.7
+            if stroke.feed(int(x), moment, int(y)):
+                return True
+            moment += 0.05
+        return False
+
+    results = [(f"waving along {axis} is noticed", wave(axis)) for axis in ("x", "y", "diagonal")]
+
+    # y is optional, so a caller with only one axis to give still works.
+    stroke = petting.Stroke()
+    fired = any(stroke.feed(600 + FAR * (1 if i % 2 == 0 else -1), i * 0.1) for i in range(8))
+    results.append(("x alone still works", fired))
+    return results
+
+
 def rejects() -> list[tuple[str, bool]]:
     """The half that matters more: things that must never read as affection."""
     results = []
@@ -98,7 +133,7 @@ def rejects() -> list[tuple[str, bool]]:
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("triggers", triggers()), ("rejects", rejects())):
+    for label, results in (("triggers", triggers()), ("directions", directions()), ("rejects", rejects())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

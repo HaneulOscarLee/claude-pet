@@ -94,7 +94,6 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.call": "Come when waved at",
         "menu.behaviour": "Behaviour…",
         "menu.look": "Watch the pointer",
-        "menu.come": "Come here",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
         "menu.desktop": "Follow Claude Desktop",
@@ -138,7 +137,6 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.call": "부르면 오기",
         "menu.behaviour": "동작…",
         "menu.look": "포인터 쳐다보기",
-        "menu.come": "이리 와",
         "menu.notify": "데스크톱 알림",
         "menu.autostart": "클로드와 함께 시작",
         "menu.desktop": "Claude Desktop 연동",
@@ -1162,15 +1160,18 @@ class Overlay(Gtk.Window):
             return True
         x, y = position
 
-        centre_x = self.sprite_x + self.view.width / 2
-        centre_y = self.sprite_y + self.view.height / 2
-        if math.hypot(x - centre_x, y - centre_y) < self.view.width * 2:
-            # Close enough that this is stroking, not calling. Handing it to
-            # the other detector as well would have one gesture mean both.
+        # Only the sprite itself is excluded, plus a little. Petting arrives
+        # as motion events over the pet, which the window's input shape
+        # already confines to the sprite -- so a wide exclusion zone bought
+        # nothing and swallowed the natural thing to do, which is to wave at
+        # the pet from just beside it.
+        margin = CALL_ARRIVAL_PIXELS
+        if (self.sprite_x - margin <= x <= self.sprite_x + self.view.width + margin
+                and self.sprite_y - margin <= y <= self.sprite_y + self.view.height + margin):
             self.call_stroke.reset()
             return True
 
-        if self.call_stroke.feed(x, now):
+        if self.call_stroke.feed(x, now, y):
             self.come_here(x)
         return True
 
@@ -1369,7 +1370,7 @@ class Overlay(Gtk.Window):
             if self.press_origin is None:
                 # Not a drag and not on the way to one: the pointer is just
                 # over the pet, which is where being stroked happens.
-                self._note_stroke(int(event.x_root))
+                self._note_stroke(int(event.x_root), int(event.y_root))
                 return False
             start_x, start_y = self.press_origin
             if math.hypot(event.x_root - start_x, event.y_root - start_y) < DRAG_THRESHOLD:
@@ -1442,7 +1443,7 @@ class Overlay(Gtk.Window):
         result = jump.to_session(self.locator)
         self._flash(result.message)
 
-    def _note_stroke(self, x: int) -> None:
+    def _note_stroke(self, x: int, y: int = 0) -> None:
         """Watch a hovering pointer for the back-and-forth of being stroked.
 
         Only the direction matters, not the distance: what separates stroking
@@ -1452,7 +1453,7 @@ class Overlay(Gtk.Window):
         """
         if not self.settings.get("petting", True):
             return
-        if self.stroke.feed(x, time.monotonic()):
+        if self.stroke.feed(x, time.monotonic(), y):
             self._enjoy_petting()
 
     def _enjoy_petting(self) -> None:
@@ -1593,10 +1594,6 @@ class Overlay(Gtk.Window):
             # Only offered by a pack that has the poses for it.
             if self.view.looks:
                 entries.append(("toggle", "look_at_mouse", self.labels["menu.look"], True))
-            # The deliberate form of the gesture above it, so the two sit
-            # together rather than one being a stray action at the top level.
-            entries.append(("separator",))
-            entries.append(("action", self.labels["menu.come"], self.come_here))
             return entries
 
         toggles = [

@@ -615,13 +615,15 @@ not put it. Run `claude-pet run` with `CLAUDE_PET_DEBUG=1` and it prints the
 speed of every release, if you want to argue with the number.
 
 **Calling it** is the petting gesture done from a distance: wave the pointer
-back and forth anywhere on screen and the pet walks over, stopping short so
-it is not sitting on whatever you were about to click. A keyboard shortcut
+back and forth anywhere on screen — in any direction, including up and down —
+and the pet walks over, stopping short so it is not sitting on whatever you
+were about to click. Waving right beside the pet works too; only the sprite
+itself is excluded, since that is where stroking happens. A keyboard shortcut
 would be the obvious way and is not available — global shortcuts need a
 desktop portal this Wayland session does not provide, and the window refuses
 focus on purpose so an always-on-top pet never swallows a keystroke. The
 pointer can be read wherever it is, which is already how a v2 pack knows
-where to look. **Come here** is in the menu for the deliberate version.
+where to look.
 
 The right-click menu covers day-to-day use on its own: switch pack, browse the
 gallery, install a pet (paste its id or just its gallery link), remove the
