@@ -1593,6 +1593,10 @@ class Overlay(Gtk.Window):
             # Only offered by a pack that has the poses for it.
             if self.view.looks:
                 entries.append(("toggle", "look_at_mouse", self.labels["menu.look"], True))
+            # The deliberate form of the gesture above it, so the two sit
+            # together rather than one being a stray action at the top level.
+            entries.append(("separator",))
+            entries.append(("action", self.labels["menu.come"], self.come_here))
             return entries
 
         toggles = [
@@ -1614,7 +1618,9 @@ class Overlay(Gtk.Window):
             ("separator",),
             # High up in both, because it is what you reach for when the pet is
             # somewhere you cannot get at it.
-            ("action", self.labels["menu.come"], self.come_here),
+            # Stays at the top level on purpose: it is what you reach for
+            # when the pet is somewhere you cannot click, and burying the
+            # recovery a page deeper would defeat it.
             ("action", self.labels["menu.reset"], self.reset_position),
             ("separator",),
             *[("toggle", key, label, default) for key, label, default in toggles],
