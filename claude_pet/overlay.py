@@ -465,6 +465,8 @@ class Overlay(Gtk.Window):
         self.flick = motion.Flick()
         #: Pending config write for a slider being dragged.
         self.tune_save: int | None = None
+        #: The tuning window, while it is open.
+        self.tuning: Gtk.Window | None = None
         self._rebuild_gestures()
         self.throw: motion.Throw | None = None
         self.thrown_at = 0.0
@@ -1361,12 +1363,80 @@ class Overlay(Gtk.Window):
         config.update(**{key: self.settings[key] for key, *_rest in self.TUNABLE})
         return False
 
-    def _reset_tuning(self, popup) -> None:
+    def _slider_row(self, key: str, low: float, high: float,
+                    step: float, digits: int) -> Gtk.Widget:
+        """One labelled slider, applied as it moves."""
+        holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        holder.set_margin_start(12)
+        holder.set_margin_end(12)
+        label = Gtk.Label(label=self.labels[f"tune.{key}"])
+        label.set_alignment(0.0, 0.5)
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, low, high, step)
+        scale.set_digits(digits)
+        scale.set_value(self._number(key, config.DEFAULTS[key]))
+        scale.set_size_request(260, -1)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.connect("value-changed", lambda widget: self._tune(key, widget.get_value()))
+        holder.pack_start(label, False, False, 0)
+        holder.pack_start(scale, False, False, 0)
+        holder.scale = scale
+        holder.tune_key = key
+        return holder
+
+    def _open_tuning(self) -> None:
+        """A window of sliders, not a page of them.
+
+        It was a page in the pet's own popup, which worked there and could
+        never work in the status bar: that menu is serialised over DBusMenu and
+        has no slider to serialise, so the entry opened an empty submenu. A
+        window is drawn by us either way, is not clipped by the panel, and can
+        be left open beside the pet while you drag things and watch what
+        happens.
+        """
+        if self.tuning is not None:
+            self.tuning.present()
+            return
+
+        window = Gtk.Window(title=self.labels["menu.tuning"].rstrip("… "))
+        window.set_keep_above(True)
+        window.set_resizable(False)
+        window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        rows = [self._slider_row(key, low, high, step, digits)
+                for key, low, high, step, digits in self.TUNABLE]
+        for holder in rows:
+            box.pack_start(holder, False, False, 2)
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 4)
+
+        reset = self._menu_row(self.labels["menu.tune_reset"],
+                               lambda _b: self._reset_tuning(rows))
+        box.pack_start(reset, False, False, 0)
+        window.add(box)
+
+        def forget(*_args) -> bool:
+            self.tuning = None
+            return False
+
+        window.connect("destroy", forget)
+        window.show_all()
+        # The pet refuses focus on purpose, and a window transient for it would
+        # inherit that; this one needs the keyboard for arrow keys on a slider.
+        window.set_accept_focus(True)
+        window.present()
+        self.tuning = window
+
+    def _reset_tuning(self, rows) -> None:
         for key, *_rest in self.TUNABLE:
             self.settings[key] = config.DEFAULTS[key]
         self._rebuild_gestures()
         self._save_tuning()
-        self._render_page(popup, "tuning")
+        # Move the sliders themselves, or the window would show the old values
+        # while the pet behaved by the new ones.
+        for holder in rows:
+            holder.scale.set_value(self._number(holder.tune_key,
+                                                config.DEFAULTS[holder.tune_key]))
 
     def _trusted_pointer_position(self) -> tuple[int, int] | None:
         """The pointer, but only when X11 still knows where it is.
@@ -1868,6 +1938,11 @@ class Overlay(Gtk.Window):
     # would each need their own dismissal handling, which took long enough to
     # get right once, so a page swaps the contents of the window already open.
 
+    #: Every page there is. A name not on this list is a mistake, and used to
+    #: draw the main page instead -- which looks like the page you asked for
+    #: having the wrong contents.
+    PAGES = ("main", "pets", "language", "behaviour")
+
     def _menu_model(self, page: str = "main") -> list[tuple]:
         """The menu, written down once for both places it gets drawn.
 
@@ -1888,15 +1963,6 @@ class Overlay(Gtk.Window):
             entries.append(("action", self.labels["menu.browse"], self._open_gallery))
             entries.append(("action", self.labels["menu.install"], self._install_pack))
             entries.append(("action", self.labels["menu.remove"], self._remove_pack))
-            return entries
-
-        if page == "tuning":
-            entries: list[tuple] = []
-            for key, low, high, step, digits in self.TUNABLE:
-                entries.append(("slider", key, self.labels[f"tune.{key}"],
-                                low, high, step, digits))
-            entries.append(("separator",))
-            entries.append(("reset-tuning", self.labels["menu.tune_reset"]))
             return entries
 
         if page == "language":
@@ -1920,7 +1986,12 @@ class Overlay(Gtk.Window):
             if self.view.looks:
                 entries.append(("toggle", "look_at_mouse", self.labels["menu.look"], True))
             entries.append(("separator",))
-            entries.append(("submenu", self.labels["menu.tuning"], "tuning"))
+            # An action rather than a page. Sliders cannot live in the status
+            # bar's menu at all -- it is serialised over DBusMenu, which has no
+            # such thing -- so the page there came out empty, which is how this
+            # was reported. A window works from either menu and cannot be
+            # clipped by the panel.
+            entries.append(("action", self.labels["menu.tuning"], self._open_tuning))
             return entries
 
         toggles = [
@@ -2015,31 +2086,10 @@ class Overlay(Gtk.Window):
             row(self.labels["menu.back"], go("main"))
             separator()
 
-        def slider(key: str, label: str, low: float, high: float,
-                   step: float, digits: int) -> None:
-            holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            holder.set_margin_start(12)
-            holder.set_margin_end(12)
-            caption_label = Gtk.Label(label=label)
-            caption_label.set_alignment(0.0, 0.5)
-            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, low, high, step)
-            scale.set_digits(digits)
-            scale.set_value(self._number(key, config.DEFAULTS[key]))
-            scale.set_size_request(220, -1)
-            scale.set_value_pos(Gtk.PositionType.RIGHT)
-            scale.connect("value-changed", lambda widget: self._tune(key, widget.get_value()))
-            holder.pack_start(caption_label, False, False, 0)
-            holder.pack_start(scale, False, False, 0)
-            box.pack_start(holder, False, False, 2)
-
         for entry in self._menu_model(page):
             kind = entry[0]
             if kind == "separator":
                 separator()
-            elif kind == "slider":
-                slider(*entry[1:])
-            elif kind == "reset-tuning":
-                row(entry[1], lambda *_a: self._reset_tuning(popup))
             elif kind == "caption":
                 caption(entry[1])
             elif kind == "submenu":

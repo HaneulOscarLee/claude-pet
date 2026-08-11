@@ -375,8 +375,8 @@ the same way round, with straight runs between. A circle, a square, a triangle
 and a zigzag are none of them stars, and a star does not also read as a
 circle.
 
-**How all this feels is yours to set.** Right-click → Behaviour → Tuning has a
-slider for each of it — how hard a flick has to be, how much friction and
+**How all this feels is yours to set.** Right-click → Behaviour → Tuning opens
+a window with a slider for each of it — how hard a flick has to be, how much friction and
 bounce a throw has, how fast the pet walks when called, and how quick, how big
 and how round the circle has to be. They apply as you drag them, and **Reset
 to defaults** puts them all back. Every one of these was guessed at and
@@ -429,7 +429,7 @@ clawd · v2
 ──────────────
 Pets…                  →  pick one · browse the gallery · install · remove
 Language…              →  automatic · English · 한국어
-Behaviour…             →  wander · petted · thrown · called · star · tuning
+Behaviour…             →  wander · petted · thrown · called · star · tuning…
 ──────────────
 Always on top               ✓
 Desktop notifications

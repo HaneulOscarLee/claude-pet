@@ -93,7 +93,7 @@ def checks() -> list[tuple[str, bool]]:
     popup = Gtk.Window()
     popup.menu_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
     popup.add(popup.menu_box)
-    for page in ("main", "pets", "language", "behaviour", "tuning"):
+    for page in window.PAGES:
         try:
             window._render_page(popup, page)
             drawn = len(popup.menu_box.get_children())
@@ -103,6 +103,33 @@ def checks() -> list[tuple[str, bool]]:
             continue
         results.append((f"the {page} page draws ({drawn} rows)", drawn > 0))
 
+    # The status bar's menu is built from the same model by different code,
+    # and it silently skipped any entry kind it did not know -- so the tuning
+    # entry opened an empty submenu there while working in the pet's own menu.
+    # Nothing about that is visible until someone opens it.
+    tray_menu = window._build_tray_menu()
+
+    def count(menu):
+        """Every item, and every item of every submenu, as (label, children)."""
+        found = []
+        for item in menu.get_children():
+            child = item.get_submenu() if hasattr(item, "get_submenu") else None
+            found.append((item.get_label() if hasattr(item, "get_label") else "",
+                          len(child.get_children()) if child is not None else None))
+        return found
+
+    rows = count(tray_menu)
+    results.append((f"the status bar menu is built ({len(rows)} items)", len(rows) > 0))
+    empty = [label for label, children in rows if children == 0]
+    results.append((f"...with no empty submenus ({empty or 'none'})", not empty))
+
+    # And the pet's own menu draws every kind the model can produce, which is
+    # the other half of the same fault.
+    kinds = {entry[0] for page in window.PAGES for entry in window._menu_model(page)}
+    results.append((f"the model uses only known kinds ({', '.join(sorted(kinds))})",
+                    kinds <= {"separator", "caption", "submenu", "action", "toggle",
+                              "choice", "update"}))
+
     # The sliders have to move something. Each one is applied on the spot,
     # which is the only reason to have a slider rather than a config key.
     #
@@ -111,7 +138,15 @@ def checks() -> list[tuple[str, bool]]:
     # their sliders back to the defaults.
     written: list[dict] = []
     config.update = lambda **values: written.append(values)
-    window._render_page(popup, "tuning")
+    window._open_tuning()
+    results.append(("the tuning window opens", window.tuning is not None))
+    window._open_tuning()
+    results.append(("...and opening it again reuses the one window",
+                    window.tuning is not None))
+    slider_rows = [window._slider_row(key, low, high, step, digits)
+                   for key, low, high, step, digits in window.TUNABLE]
+    results.append((f"it has a slider for every knob ({len(slider_rows)})",
+                    len(slider_rows) == len(window.TUNABLE)))
     for key, low, high, _step, _digits in window.TUNABLE:
         window._tune(key, high)
         at_high = window.settings[key]
@@ -136,7 +171,7 @@ def checks() -> list[tuple[str, bool]]:
     for where, y in (("top", area.y), ("middle", area.y + area.height // 2),
                      ("bottom", area.y + area.height - window.view.height)):
         window._place_sprite(area.x + 400, y)
-        for page in ("main", "pets", "behaviour", "tuning"):
+        for page in ("main", "pets", "behaviour"):
             window._render_page(popup, page)
             _minimum, natural = popup.get_preferred_size()
             left, top = popup.get_position()
@@ -145,13 +180,19 @@ def checks() -> list[tuple[str, bool]]:
             results.append((f"the {page} menu fits with the pet at the {where}"
                             f" ({natural.width}x{natural.height} at {top})", inside))
 
-    window._reset_tuning(popup)
+    window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]
                         for key, *_rest in window.TUNABLE)))
     results.append(("...and is written out once", len(written) == 1))
     results.append(("...naming every knob",
                     written and set(written[0]) == {k for k, *_r in window.TUNABLE}))
+    results.append(("...and the sliders follow it back",
+                    all(abs(holder.scale.get_value()
+                            - float(config.DEFAULTS[holder.tune_key])) < 0.01
+                        for holder in slider_rows)))
+    window.tuning.destroy()
+    results.append(("closing it lets it open again", window.tuning is None))
     return results
 
 
