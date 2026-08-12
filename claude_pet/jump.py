@@ -134,15 +134,47 @@ def _tmux_client_pids(locator: dict[str, Any]) -> list[int]:
     return found
 
 
-def _x11_window_for(pids: list[int]) -> str | None:
+def _terminal_window_title(locator: dict[str, Any]) -> str | None:
+    """The title of the window holding this session's terminal, if it will say.
+
+    Terminator serves every window from one process, so `_NET_WM_PID` cannot
+    tell them apart -- but it hands each terminal a uuid through the
+    environment and will map that uuid to a window title on request. The title
+    is then something `wmctrl` can match, which is how the right window of
+    several gets picked.
+
+    Returns None whenever anything is missing, which is most terminals.
+    """
+    uuid = locator.get("terminal_uuid")
+    bus_name = locator.get("terminal_bus")
+    path = locator.get("terminal_path")
+    if not (isinstance(uuid, str) and isinstance(bus_name, str) and isinstance(path, str)):
+        return None
+    try:
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        reply = bus.call_sync(
+            bus_name, path, bus_name, "get_window_title",
+            GLib.Variant("(s)", (uuid,)), None,
+            Gio.DBusCallFlags.NONE, int(TIMEOUT_SECONDS * 1000), None,
+        )
+        title = reply.unpack()[0]
+    except Exception:  # noqa: BLE001 -- gone, renamed, or not that terminal
+        return None
+    return title if isinstance(title, str) and title else None
+
+
+def _x11_window_for(pids: list[int], title: str | None = None) -> str | None:
     """Window id owned by one of `pids`, using whatever tool is installed.
 
-    The first match, which is exact for a terminal that runs a process per
-    window and a guess for one that does not. Terminator serves every window
-    it has from a single process, so all of them carry the same `_NET_WM_PID`
-    and there is nothing here to tell them apart -- no property, and no API on
-    its side either. With one window open this is right; with several it may
-    raise a sibling of the one wanted.
+    With a `title`, the window has to match that as well, which is what makes
+    the choice exact for a terminal serving several windows from one process:
+    they all carry the same `_NET_WM_PID`, so without it the first listed wins
+    and the pet jumps to a sibling of the window that was waiting.
+
+    Without one it is the first match: exact for a terminal that runs a
+    process per window, a guess for one that does not.
     """
     if shutil.which("wmctrl"):
         try:
@@ -152,10 +184,17 @@ def _x11_window_for(pids: list[int]) -> str | None:
             ).stdout
         except (OSError, subprocess.SubprocessError):
             listing = ""
+        owned = []
         for line in listing.splitlines():
-            fields = line.split(None, 3)
+            fields = line.split(None, 4)
             if len(fields) >= 3 and fields[2].isdigit() and int(fields[2]) in pids:
-                return fields[0]
+                owned.append((fields[0], fields[4] if len(fields) >= 5 else ""))
+        if title:
+            for window, name in owned:
+                if name == title:
+                    return window
+        if owned:
+            return owned[0][0]
     if shutil.which("xdotool"):
         for pid in pids:
             try:
@@ -180,7 +219,7 @@ def _x11_jump(locator: dict[str, Any]) -> JumpResult | None:
     if not (shutil.which("wmctrl") or shutil.which("xdotool")):
         return None
 
-    window = _x11_window_for(pids)
+    window = _x11_window_for(pids, _terminal_window_title(locator))
     if window is None:
         return None
     if shutil.which("wmctrl") and _run(["wmctrl", "-i", "-a", window]):

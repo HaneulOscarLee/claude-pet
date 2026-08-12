@@ -479,6 +479,15 @@ target can hand out. An application raising *itself* is always allowed, which
 is what the D-Bus route uses — but the terminal has to expose a method for it,
 and not all do.
 
+A terminal that serves several windows from **one process** gives them all the
+same `_NET_WM_PID`, so "the window owned by that process" is ambiguous and the
+pet used to raise whichever came first — reported as clicking **needs you**
+bringing up a different window than the session that was waiting. Terminator
+puts a per-terminal uuid in the environment and will map it to a window title
+on request, so where that is available the right window is picked exactly. For
+terminals that offer nothing of the kind it is still the first window, and
+tmux is still the way to land on an exact pane.
+
 `setup` handles this when it applies, by making your terminal run under
 XWayland so `wmctrl` can reach it:
 

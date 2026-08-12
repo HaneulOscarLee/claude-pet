@@ -118,4 +118,21 @@ def locator() -> dict[str, Any]:
     term = os.environ.get("TERM_PROGRAM")
     if term:
         found["term_program"] = term
+
+    # Which terminal *widget* this session is in, where the terminal says so.
+    #
+    # A terminal that serves every window from one process gives them all the
+    # same `_NET_WM_PID`, so raising "the window owned by that pid" raises
+    # whichever comes first -- reported as the pet jumping to a different
+    # window than the session that was waiting. Terminator puts a per-terminal
+    # uuid in the environment and will map it to a window on request, which is
+    # the only thing here that tells its windows apart.
+    uuid = os.environ.get("TERMINATOR_UUID")
+    if uuid:
+        found["terminal_uuid"] = uuid
+        bus = os.environ.get("TERMINATOR_DBUS_NAME")
+        path = os.environ.get("TERMINATOR_DBUS_PATH")
+        if bus and path:
+            found["terminal_bus"] = bus
+            found["terminal_path"] = path
     return found
