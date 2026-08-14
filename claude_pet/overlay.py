@@ -118,6 +118,8 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.update_current": "Up to date",
         "menu.update_available": "Update to {version}",
         "menu.updating": "updating…",
+        "toast.uptodate": "already up to date",
+        "toast.update_failed": "update failed — see the terminal",
         "menu.quit": "Quit",
         "dialog.install": "Pet id, or a codex-pets.net link:",
         "dialog.remove": "Remove {pet}? It can be installed again from the gallery.",
@@ -164,6 +166,8 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.update_current": "최신 버전",
         "menu.update_available": "{version} 로 업데이트",
         "menu.updating": "업데이트 중…",
+        "toast.uptodate": "이미 최신이에요",
+        "toast.update_failed": "업데이트 실패 — 터미널 확인",
         "menu.quit": "종료",
         "dialog.install": "펫 id 또는 codex-pets.net 링크:",
         "dialog.remove": "{pet} 을(를) 삭제할까요? 갤러리에서 다시 받을 수 있습니다.",
@@ -2301,16 +2305,52 @@ class Overlay(Gtk.Window):
         self._in_background(update.check, done)
 
     def _apply_update(self) -> None:
-        """Hand the update to a detached process: it will stop and respawn us.
+        """Run the update and report how it went.
 
-        Packaged installs included. They cannot rewrite /usr themselves, but
-        `update` hands the new .deb to the system installer and polkit asks for
-        authority -- which is a good deal more use than the link this used to
-        open and leave the reader to act on.
+        A git checkout that succeeds respawns the overlay from under us, so a
+        success there is never seen here -- but a git checkout that *cannot*
+        fast-forward (local commits not pushed, which is the common case for
+        whoever is hacking on this) exits without restarting anything, and the
+        "updating…" toast used to sit there for its full minute saying nothing
+        happened when something had: it had failed. So the outcome is waited
+        for and the toast replaced with what actually occurred.
+
+        A packaged install hands the new .deb to the system installer, which
+        pops its own authority prompt; that path is left to the detached
+        process since it outlives us by design.
         """
+        from . import update
+
+        # A packaged install cannot rewrite /usr itself; hand it to the
+        # detached updater, which pops the system installer's authority prompt
+        # and outlives us. This one path stays fire-and-forget by necessity.
+        if update.is_system_install():
+            self._flash(self.labels["menu.updating"], seconds=120)
+            self._apply_update_detached()
+            return
+
+        self._flash(self.labels["menu.updating"], seconds=120)
+
+        def work():
+            return update.apply()
+
+        def done(outcome, error):
+            if error is not None or outcome == "failed":
+                self._flash(self.labels["toast.update_failed"])
+            elif outcome == "current":
+                self._flash(self.labels["toast.uptodate"])
+            else:
+                # The files changed underneath us; restart onto them. Same
+                # exec the menu's restart uses, so the pet comes back on the
+                # new code with its place and state.
+                self.quit(restart=True)
+            return False
+
+        self._in_background(work, done)
+
+    def _apply_update_detached(self) -> None:
         from . import launch
 
-        self._flash(self.labels["menu.updating"], seconds=60)
         try:
             subprocess.Popen(  # noqa: S603 - fixed argv
                 [str(launch.launcher_path()), "update"],

@@ -187,10 +187,36 @@ def check() -> dict[str, str | bool]:
 
     Raises UpdateError if GitHub cannot be reached, so callers can tell "no
     update" apart from "could not look".
+
+    A git checkout that is *ahead* of the branch -- local work not pushed yet --
+    is not out of date, though its sha differs from the branch head. Comparing
+    the two for mere inequality lit up "an update is available" for exactly the
+    state that most needs it not to: your own unpushed commits, which a
+    fast-forward then refuses to touch. So a checkout already containing the
+    branch head is up to date.
     """
     current = installed_version()
-    latest = latest_release() if is_system_install() else latest_sha()[:7]
-    return {"current": current, "latest": latest, "available": current != latest}
+    if is_system_install():
+        latest = latest_release()
+        return {"current": current, "latest": latest, "available": current != latest}
+
+    latest = latest_sha()
+    available = latest[:7] != current and not _contains_commit(latest)
+    return {"current": current, "latest": latest[:7], "available": available}
+
+
+def _contains_commit(sha: str) -> bool:
+    """Whether this checkout's history already includes `sha`.
+
+    True when the branch head is an ancestor of HEAD -- i.e. we are level with
+    it or ahead of it. `merge-base --is-ancestor` is exactly this question and
+    exits 0 for yes; anything else (not an ancestor, unknown sha, not a repo)
+    is a no.
+    """
+    try:
+        return _git("merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+    except (OSError, UpdateError):
+        return False
 
 
 def update(check_only: bool = False) -> int:
@@ -241,6 +267,37 @@ def update(check_only: bool = False) -> int:
     _report_new_requirements()
     _restart_overlay()
     return 0
+
+
+def apply() -> str:
+    """Do the update but restart nothing; return what happened.
+
+    For the overlay, which is itself the thing `update()` would restart --
+    calling that in-process would have it kill its own thread. This does the
+    fetch-and-fast-forward (or tarball swap) and reports one of:
+
+        "updated"  the files changed; the caller should respawn
+        "current"  nothing to do -- already level, or a checkout ahead of the
+                   branch, which is not a failure and must not read as one
+        "failed"   could not, e.g. a checkout with unpushed commits that will
+                   not fast-forward
+
+    A packaged install is not handled here; that path stays detached because
+    the system installer outlives the pet.
+    """
+    root = install_root()
+    if is_system_install(root):
+        return "failed"
+    try:
+        before, after = _update_git(root) if is_git_checkout(root) else _update_tarball(root)
+    except UpdateError as exc:
+        print(f"claude-pet: {exc}")
+        return "failed"
+    if before == after:
+        return "current"
+    print(f"updated : {before} -> {after}")
+    _report_new_requirements()
+    return "updated"
 
 
 #: Optional pieces that a version might newly depend on, and how to get them.

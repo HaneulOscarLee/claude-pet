@@ -49,6 +49,10 @@ jobs:
       - name: Jump target tests
         run: python3 tests/test_jump.py
 
+      # Deciding there is an update, and reporting how applying it went.
+      - name: Update logic tests
+        run: python3 tests/test_update.py
+
       # Placement arithmetic, against a stand-in for the screen layout.
       - name: Geometry tests
         run: python3 tests/test_geometry.py
