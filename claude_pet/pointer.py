@@ -226,10 +226,98 @@ def _is_transient(exc: Exception) -> bool:
     )
 
 
+# --- A non-blocking bridge read, for the hot loop -----------------------------
+#
+# `from_shell` above is synchronous: it asks the shell and waits up to
+# BRIDGE_TIMEOUT_MS for the answer. That is fine for doctor, which asks once,
+# and wrong for the 16ms walk loop and 50ms gesture poll, which ask constantly.
+# The bridge runs *inside* gnome-shell's own main loop -- the very loop that is
+# compositing whatever heavy web page is on screen -- so under load the reply
+# does not come within a frame, the sync call times out and returns None, the
+# walk target stops being updated, and the pointer's samples are dropped. That
+# is the "call fails, and the pet stops as if at a wall, but only on a busy
+# page" report exactly.
+#
+# So the hot loop uses this instead: it fires the request and does not wait,
+# reading whatever answer last came back. A busy compositor makes that answer a
+# little older, never absent, and never blocks the pet's own loop.
+
+#: The freshest bridge answer that has arrived, and when.
+_async_pos: tuple[int, int] | None = None
+_async_at = 0.0
+#: One request outstanding at a time; no point piling them up on a slow shell.
+_async_inflight = False
+
+#: How old the last answer may be and still be used. Longer than a handful of
+#: frames, so an ordinary compositor hitch is ridden out on the last position
+#: rather than reported as "nobody can say"; short enough that a genuinely lost
+#: pointer is not walked toward for long.
+ASYNC_STALE_SECONDS = 0.30
+
+
+def _on_async_reply(proxy, result, _user_data) -> None:
+    global _async_pos, _async_at, _async_inflight, _bridge, _bridge_missing_at
+    _async_inflight = False
+    try:
+        reply = proxy.call_finish(result)
+        x, y = reply.unpack()
+    except Exception as exc:  # noqa: BLE001
+        # A timeout is the shell being busy; anything else is it being gone.
+        if not _is_transient(exc):
+            _bridge_missing_at = time.monotonic()
+            _bridge = None
+        return
+    _async_pos, _async_at = (int(x), int(y)), time.monotonic()
+
+
+def _pump_async() -> None:
+    """Fire one bridge request if none is in flight, and never wait for it."""
+    global _bridge, _bridge_missing_at, _async_inflight
+    if _async_inflight:
+        return
+    if _bridge_missing_at is not None:
+        if time.monotonic() - _bridge_missing_at < BRIDGE_RETRY_SECONDS:
+            return
+        _bridge_missing_at = None
+    try:
+        from gi.repository import Gio
+
+        if _bridge is None:
+            _bridge = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SESSION, Gio.DBusProxyFlags.DO_NOT_AUTO_START,
+                None, "org.gnome.Shell", BRIDGE_PATH, BRIDGE_IFACE, None,
+            )
+        _async_inflight = True
+        _bridge.call(
+            "GetPointer", None, Gio.DBusCallFlags.NONE,
+            BRIDGE_TIMEOUT_MS, None, _on_async_reply, None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _async_inflight = False
+        if not _is_transient(exc):
+            _bridge_missing_at = time.monotonic()
+            _bridge = None
+
+
+def from_shell_live() -> tuple[int, int] | None:
+    """The freshest bridge answer without ever blocking; None if none is fresh.
+
+    Delivered by the GLib main loop the overlay is already running, so the
+    request fired here is answered between the pet's own ticks. Outside a main
+    loop -- doctor, a test -- no answer is ever delivered and this returns None;
+    those call `from_shell` directly, which does wait.
+    """
+    _pump_async()
+    if _async_pos is not None and time.monotonic() - _async_at < ASYNC_STALE_SECONDS:
+        return _async_pos
+    return None
+
+
 def bridge_present() -> bool:
     """Whether the shell answers, checked afresh rather than from the cache."""
-    global _bridge, _bridge_missing_at
+    global _bridge, _bridge_missing_at, _async_pos, _async_at, _async_inflight
     _bridge, _bridge_missing_at = None, None
+    _async_pos, _async_at, _async_inflight = None, 0.0, False
     forget()
     return from_shell() is not None
 
@@ -270,7 +358,7 @@ def sample(raw) -> tuple[tuple[int, int] | None, bool]:
     now = time.monotonic()
     if _sample is not None and now - _sample_at < SAMPLE_SECONDS:
         return _sample, False
-    fresh = raw() if visible() else from_shell()
+    fresh = raw() if visible() else from_shell_live()
     if fresh is None:
         # Say nothing rather than repeat a stale answer: a position nobody can
         # vouch for is the thing this module exists to refuse.

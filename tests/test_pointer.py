@@ -33,9 +33,14 @@ class Session:
         self.was = os.environ.get("XDG_SESSION_TYPE")
         self.real_query = pointer._query_child
         self.real_shell = pointer.from_shell
+        self.real_live = pointer.from_shell_live
         os.environ["XDG_SESSION_TYPE"] = self.session_type
         pointer._query_child = lambda: self.child
         pointer.from_shell = lambda: self.shell
+        # The hot path reads the bridge without blocking; in a test there is no
+        # main loop to deliver an async reply, so it is stubbed to the same
+        # answer the synchronous one would give.
+        pointer.from_shell_live = lambda: self.shell
         # One reading is cached and shared between the gesture poll and the
         # walk loop, so a test that did not clear it would be checking the
         # previous case's answer.
@@ -45,6 +50,7 @@ class Session:
     def __exit__(self, *_exc) -> None:
         pointer._query_child = self.real_query
         pointer.from_shell = self.real_shell
+        pointer.from_shell_live = self.real_live
         if self.was is None:
             os.environ.pop("XDG_SESSION_TYPE", None)
         else:
@@ -175,11 +181,67 @@ def sharing_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def async_checks() -> list[tuple[str, bool]]:
+    """The hot-path read never blocks, and rides out a brief compositor stall.
+
+    The bug it fixes was load-shaped: the bridge runs inside gnome-shell's own
+    main loop, so a heavy web page made the synchronous read time out and
+    return None -- freezing the walk target and dropping gesture samples, but
+    only on a busy page, which is why it was intermittent and site-specific.
+    """
+    import time
+
+    results = []
+    real_pump = pointer._pump_async
+    try:
+        pointer._pump_async = lambda: None  # no real D-Bus in a test
+
+        # A recent answer is used as-is; nothing blocks.
+        pointer._async_pos, pointer._async_at = (321, 654), time.monotonic()
+        results.append(("a fresh async answer is returned",
+                        pointer.from_shell_live() == (321, 654)))
+
+        # An answer older than the stale window is not walked toward.
+        pointer._async_at = time.monotonic() - (pointer.ASYNC_STALE_SECONDS + 0.1)
+        results.append(("a stale async answer is refused",
+                        pointer.from_shell_live() is None))
+
+        # Never having heard back is None, not a crash.
+        pointer._async_pos, pointer._async_at = None, 0.0
+        results.append(("no answer yet is None", pointer.from_shell_live() is None))
+
+        # The reply handler stores what the shell sent.
+        class Reply:
+            @staticmethod
+            def unpack():
+                return (12, 34)
+
+        class Proxy:
+            @staticmethod
+            def call_finish(_res):
+                return Reply()
+
+        pointer._async_inflight = True
+        pointer._on_async_reply(Proxy(), object(), None)
+        results.append(("a reply is stored", pointer._async_pos == (12, 34)))
+        results.append(("...and clears the in-flight flag",
+                        pointer._async_inflight is False))
+
+        # The stale window is a few frames, not a marathon.
+        results.append(("the stale window is short",
+                        0.1 <= pointer.ASYNC_STALE_SECONDS <= 0.6))
+    finally:
+        pointer._pump_async = real_pump
+        pointer._async_pos, pointer._async_at, pointer._async_inflight = None, 0.0, False
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
     for label, results in (("wayland", wayland_checks()), ("x11", x11_checks()),
-                            ("fallback", fallback_checks()), ("sharing", sharing_checks())):
+                            ("fallback", fallback_checks()), ("sharing", sharing_checks()),
+                            ("async", async_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

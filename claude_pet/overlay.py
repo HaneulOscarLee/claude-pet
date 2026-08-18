@@ -1193,25 +1193,32 @@ class Overlay(Gtk.Window):
             # You move on while it walks, and a pet arriving at the place
             # you used to be has answered a question nobody asked.
             here, fresh = pointer_visibility.sample(self._pointer_position)
-            if here is not None:
-                # Only a fresh reading says anything about whether the pointer
-                # has stopped. This runs sixty times a second and the reading
-                # is shared with the gesture poll, so most ticks see a repeat
-                # -- and a repeat compared against itself is nought pixels of
-                # movement, which reads as settled and lets the pet decide it
-                # has arrived while the pointer is still moving.
-                if fresh:
-                    if self.pointer_was is not None:
-                        self.pointer_settled = (
-                            math.hypot(here[0] - self.pointer_was[0],
-                                       here[1] - self.pointer_was[1])
-                            <= CALL_SETTLED_PIXELS
-                        )
-                    self.pointer_was = here
-                self.walk_target = (
-                    here[0] - self.view.width // 2,
-                    here[1] - self.view.height // 2,
-                )
+            if here is None:
+                # No trustworthy pointer this instant -- the compositor is busy
+                # enough that the bridge has not answered lately. Hold where it
+                # is rather than trudge on to the last target and stop there,
+                # which is the "stops at a wall on a heavy page" report. The
+                # walk resumes the moment a reading returns.
+                self.moved_at = now
+                return True
+            # Only a fresh reading says anything about whether the pointer has
+            # stopped. This runs sixty times a second and the reading is shared
+            # with the gesture poll, so most ticks see a repeat -- and a repeat
+            # compared against itself is nought pixels of movement, which reads
+            # as settled and lets the pet decide it has arrived while the
+            # pointer is still moving.
+            if fresh:
+                if self.pointer_was is not None:
+                    self.pointer_settled = (
+                        math.hypot(here[0] - self.pointer_was[0],
+                                   here[1] - self.pointer_was[1])
+                        <= CALL_SETTLED_PIXELS
+                    )
+                self.pointer_was = here
+            self.walk_target = (
+                here[0] - self.view.width // 2,
+                here[1] - self.view.height // 2,
+            )
             self._advance_errand(elapsed)
         else:
             self.motion_running = False
