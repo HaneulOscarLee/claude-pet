@@ -438,6 +438,9 @@ class Overlay(Gtk.Window):
         self.visual_until: float | None = None
         self.visual_return: str | None = None
         self.bubble_pinned = False
+        #: The (state, since) episode already jumped to, so its bubble
+        #: stays down until the state next changes -- you have seen it.
+        self.jumped_episode: tuple[str, float] | None = None
         self.empty_since: float | None = None
         self.locator: dict[str, Any] | None = None
         self.desktop_watcher: desktop.NotifyWatcher | None = None
@@ -1082,6 +1085,7 @@ class Overlay(Gtk.Window):
         previous = self.state
         state.log_transition(previous, new_state, snapshot)
         self.state = new_state
+        self.jumped_episode = None
         self.frame_index = 0
         self.walking = 0
 
@@ -1664,6 +1668,11 @@ class Overlay(Gtk.Window):
         # miss and then assume never happened.
         if self.walk_target is not None:
             return True
+        # Already jumped to this exact alert: keep quiet until the state moves
+        # on. Clicking to jump was you dealing with it, so the pet should stop
+        # holding the "click to jump" bubble up for the rest of the dwell.
+        if self.jumped_episode == (self.state, self.since):
+            return False
         mode = str(self.settings.get("bubble") or "active")
         if mode == "never":
             return False
@@ -1892,6 +1901,11 @@ class Overlay(Gtk.Window):
 
         result = jump.to_session(self.locator)
         self._flash(result.message)
+        # Took you there: don't keep advertising the jump for this alert. Only
+        # on success -- if it could not raise the window, the bubble stays so
+        # the pending alert is not hidden behind a jump that did nothing.
+        if result:
+            self.jumped_episode = (self.state, self.since)
 
     def _note_stroke(self, x: int, y: int = 0) -> None:
         """Watch a hovering pointer for the back-and-forth of being stroked.

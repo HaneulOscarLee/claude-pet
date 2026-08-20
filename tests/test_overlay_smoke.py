@@ -255,6 +255,53 @@ def checks() -> list[tuple[str, bool]]:
         _usage.read = real_read
         window.settings["usage"] = True
 
+    # Clicking to jump takes the bubble down for that alert until the state
+    # changes -- reported as the "click to jump" bubble lingering through the
+    # whole dwell and re-appearing on every click after you had already jumped.
+    import time as _t2
+    from claude_pet import jump as _jump
+
+    real_to_session = _jump.to_session
+    try:
+        class _R:
+            def __init__(self, ok): self.ok = ok; self.message = "there" if ok else "no"
+            def __bool__(self): return self.ok
+        window.settings["bubble"] = "active"
+        window.state = "review"
+        window.since = 1000.0
+        window.locator = {"pids": [1]}
+        window.bubble_pinned = False
+        window.walk_target = None
+        window.jumped_episode = None
+        window.flash_until = 0.0
+        results.append(("a done alert shows its bubble", window._bubble_visible()))
+
+        _jump.to_session = lambda loc: _R(True)
+        window._on_click()
+        window.flash_until = 0.0  # let the 4s result flash expire
+        results.append(("after a successful jump the bubble is down",
+                        not window._bubble_visible()))
+
+        # A fresh alert (new since) shows again.
+        window.since = 2000.0
+        results.append(("a new alert shows again", window._bubble_visible()))
+
+        # A failed jump keeps the bubble -- the alert is still pending.
+        window.jumped_episode = None
+        _jump.to_session = lambda loc: _R(False)
+        window._on_click()
+        window.flash_until = 0.0
+        results.append(("a failed jump keeps the bubble up", window._bubble_visible()))
+
+        # A real state change clears the marker.
+        window.jumped_episode = ("review", 2000.0)
+        window._adopt({"state": "running", "since": 3000.0, "sessions": 1})
+        results.append(("a state change clears the jumped marker",
+                        window.jumped_episode is None))
+    finally:
+        _jump.to_session = real_to_session
+        window.state = "idle"; window.locator = None
+
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]
