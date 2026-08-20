@@ -80,6 +80,35 @@ def checks() -> list[tuple[str, bool]]:
     results.append(("being called arrives", window.walk_target is None))
     results.append(("...on screen", window._on_screen(window.sprite_x, window.sprite_y)))
 
+    # An errand whose pointer cannot be read must not hang with its "coming"
+    # bubble up forever. When the reading stays None past the stall window the
+    # pet gives up and the bubble (tied to walk_target) comes down. This was
+    # the regression from making the walk pause on an unreadable pointer.
+    import time as _time
+    from claude_pet import pointer as _pv
+
+    real_sample = _pv.sample
+    try:
+        _pv.sample = lambda _raw: (None, False)
+        window.walk_target = (window.sprite_x + 300, window.sprite_y)
+        window.throw = None
+        window.called_at = _time.monotonic()
+        # Within the stall window it holds position, bubble still up.
+        window.errand_seen_at = _time.monotonic()
+        window.moved_at = _time.monotonic() - 0.016
+        window._advance_motion()
+        held = window.walk_target is not None
+        # Past the stall window it abandons and clears.
+        window.errand_seen_at = _time.monotonic() - (overlay.ERRAND_STALL_SECONDS + 1)
+        window.moved_at = _time.monotonic() - 0.016
+        window._advance_motion()
+        results.append(("an unreadable errand holds briefly, then gives up",
+                        held and window.walk_target is None))
+        results.append(("...taking its coming bubble down with it",
+                        not (window.walk_target is not None)))
+    finally:
+        _pv.sample = real_sample
+
     # Petting, the other thing that reaches into the window.
     window.petted_count = 0
     window._enjoy_petting()

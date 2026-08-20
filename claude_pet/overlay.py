@@ -325,6 +325,18 @@ CALL_ARRIVAL_PIXELS = 8
 #: there read as never having stopped at all.
 CALL_REST_SECONDS = 25.0
 
+#: Give up an errand that has gone this long without a usable pointer reading.
+#: The pause-on-None guard holds the pet still when the compositor cannot say
+#: where the pointer is; without a limit a reading that never returns leaves
+#: the pet standing with its "coming" bubble up forever, which is how it was
+#: reported. Long enough to ride out any real hitch, short enough not to sulk.
+ERRAND_STALL_SECONDS = 4.0
+
+#: And a plain backstop on the whole errand, in case it can read the pointer
+#: but somehow never arrives. Generous: a slow walk across a wide desk is a
+#: minute of legitimate travelling.
+ERRAND_MAX_SECONDS = 120.0
+
 #: How still the pointer must be before the pet counts as having arrived,
 #: in pixels of movement between one look and the next.
 #:
@@ -466,6 +478,7 @@ class Overlay(Gtk.Window):
         self.call_stroke = petting.Stroke()  # both replaced by _rebuild_gestures
         self.star_stroke = petting.Star()
         self.called_at = 0.0
+        self.errand_seen_at = 0.0
         self.pointer_checked_at = 0.0
         #: The tail of a drag, and the throw it may have ended in.
         self.flick = motion.Flick()
@@ -1193,6 +1206,14 @@ class Overlay(Gtk.Window):
             # You move on while it walks, and a pet arriving at the place
             # you used to be has answered a question nobody asked.
             here, fresh = pointer_visibility.sample(self._pointer_position)
+            if (here is None and now - self.errand_seen_at > ERRAND_STALL_SECONDS) \
+                    or now - self.called_at > ERRAND_MAX_SECONDS:
+                # Either the pointer has been unreadable too long, or the whole
+                # errand has overrun. Give up rather than stand there with the
+                # "coming" bubble up for good -- which is exactly what the
+                # pause-below did when a reading never came back.
+                self._abandon_errand()
+                return False
             if here is None:
                 # No trustworthy pointer this instant -- the compositor is busy
                 # enough that the bridge has not answered lately. Hold where it
@@ -1201,6 +1222,7 @@ class Overlay(Gtk.Window):
                 # walk resumes the moment a reading returns.
                 self.moved_at = now
                 return True
+            self.errand_seen_at = now
             # Only a fresh reading says anything about whether the pointer has
             # stopped. This runs sixty times a second and the reading is shared
             # with the gesture poll, so most ticks see a repeat -- and a repeat
@@ -1246,6 +1268,20 @@ class Overlay(Gtk.Window):
         self.settings["position"] = [self.pos_x, self.pos_y]
         config.update(position=self.settings["position"])
         self._halt_walk(pause=1.0)
+
+    def _abandon_errand(self) -> None:
+        """Drop an errand that cannot be finished, and clear its bubble.
+
+        Same tidy-up as arriving, without the wave and the "here": it did not
+        arrive, so it does not celebrate. Clearing walk_target is what takes
+        the "coming" bubble down.
+        """
+        self.walk_target = None
+        self.pointer_was = None
+        self.errand_at = None
+        self.motion_running = False
+        self._halt_walk(pause=1.0)
+        trace("errand abandoned: pointer unreadable or overran")
 
     def _advance_errand(self, elapsed: float = 0.1) -> None:
         """Walk toward wherever it was called to, then stop just short."""
@@ -1564,6 +1600,7 @@ class Overlay(Gtk.Window):
         self.pointer_was = None
         self.pointer_settled = True
         self.called_at = time.monotonic()
+        self.errand_seen_at = self.called_at
         # Answer before setting off. Crossing a wide desk takes a moment
         # even at speed, and a gesture with no acknowledgement for a second
         # and a half is one you assume did not work.
