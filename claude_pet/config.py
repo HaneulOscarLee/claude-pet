@@ -41,6 +41,11 @@ DEFAULTS: dict[str, Any] = {
     "call_size": 90,       # how big it must be, across
     "call_roundness": 0.6, # how round: short axis over long, 1 being a circle
     "star_size": 220,      # how big a star has to be, across, to teleport
+    # Claude Code's own usage figures, read from the JSON it hands its
+    # statusLine (5-hour / weekly limit %, cost). Shown in the menu; a bubble
+    # warns once per 5h window when the 5h limit crosses the threshold.
+    "usage": True,           # show the usage line and warn on the 5h limit
+    "usage_warn_percent": 90,  # 5h % that earns a heads-up
     "autostart": True,    # let the SessionStart hook launch the overlay
     "update_check": True,  # look for a newer version in the background
     # Follow the Claude Desktop app too: report its chat replies, and count it

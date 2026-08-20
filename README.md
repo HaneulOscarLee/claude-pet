@@ -318,6 +318,8 @@ claude-pet set language ko
 | `call_size` | `90` | how big it must be, across |
 | `call_roundness` | `0.6` | how round: short axis over long |
 | `star_size` | `220` | how big a star must be, across, to teleport |
+| `usage` | `true` | show Claude's 5h/weekly limits and cost, and warn on the 5h limit |
+| `usage_warn_percent` | `90` | 5h limit % that earns a bubble warning |
 | `fps` | `10` | animation frames per second |
 | `autostart` | `true` | let the `SessionStart` hook launch the overlay |
 | `update_check` | `true` | look for a newer version in the background |
@@ -327,6 +329,31 @@ claude-pet set language ko
 | `position` | `null` | remembered drag position |
 
 Stored in `~/.config/claude-pet/config.json`.
+
+## Usage & limits
+
+The pet reads Claude Code's own usage figures — **5-hour and weekly limit %**,
+cost, and reset times — and shows them at the top of the right-click menu
+(`5h 15% · 7d 9% · $24.73`). When the 5-hour limit crosses a threshold (90% by
+default) the pet says so in a bubble, once per window.
+
+Nothing is computed or estimated here. The percentages are the server's own
+accounting — it knows your plan's caps and reports how much of each window you
+have spent on every request — which Claude Code carries into the JSON it hands
+its `statusLine` on every render. That JSON is the only place the figures
+appear; the hooks never see them and the transcripts do not carry them.
+
+- If you already run a status line (**oh-my-claudecode**, or your own),
+  claude-pet reads the figures from its cache and leaves your status line
+  alone.
+- If you have **no** status line, `install-hooks` claims the slot with a tiny
+  one (`5h 15% · 7d 9% · $24.73`) purely to capture the figures; `uninstall-hooks`
+  removes only what it wrote.
+- Turn the whole thing off with `claude-pet set usage false`; change the
+  warning point with `claude-pet set usage_warn_percent 80`.
+
+Only **Claude Code** reports these — Codex, Gemini and the rest emit no such
+figures, so the line simply shows what is available.
 
 ## Interaction
 

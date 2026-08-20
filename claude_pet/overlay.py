@@ -95,6 +95,9 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.call": "Come when called",
         "menu.teleport": "Appear at a drawn star",
         "menu.on_top": "Always on top",
+        "usage.line": "5h {five}% · 7d {seven}%",
+        "usage.line_cost": "5h {five}% · 7d {seven}% · ${cost}",
+        "toast.usage_warn": "5h limit {five}%",
         "menu.behaviour": "Behaviour…",
         "menu.tuning": "Tuning…",
         "menu.tune_reset": "Reset to defaults",
@@ -184,6 +187,9 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.reset": "위치 초기화",
         "menu.teleport": "별 그리면 순간이동",
         "menu.on_top": "항상 위에",
+        "usage.line": "5시간 {five}% · 주간 {seven}%",
+        "usage.line_cost": "5시간 {five}% · 주간 {seven}% · ${cost}",
+        "toast.usage_warn": "5시간 한도 {five}%",
         "menu.tuning": "세부 조정…",
         "menu.tune_reset": "기본값으로",
         "tune.throw_flick": "던지기 · 필요한 세기",
@@ -486,6 +492,9 @@ class Overlay(Gtk.Window):
         self.tune_save: int | None = None
         #: The tuning window, while it is open.
         self.tuning: Gtk.Window | None = None
+        #: The 5h window (its resets_at) we have already warned about, so
+        #: the heads-up fires once per window rather than every check.
+        self.usage_warned_window: int | None = None
         self._rebuild_gestures()
         self.throw: motion.Throw | None = None
         self.thrown_at = 0.0
@@ -534,6 +543,9 @@ class Overlay(Gtk.Window):
             GLib.timeout_add(CALL_POLL_MS, self._listen_for_a_call)
             self.code_stamp = self._code_stamp()
             GLib.timeout_add_seconds(60, self._check_for_new_code)
+            # First look soon after start, then every couple of minutes.
+            GLib.timeout_add_seconds(15, self._check_usage_once)
+            GLib.timeout_add_seconds(120, lambda: self._check_usage_once() or True)
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -2058,8 +2070,12 @@ class Overlay(Gtk.Window):
         if desktop.installed():
             toggles.insert(2, ("desktop", self.labels["menu.desktop"], True))
 
+        header = [("caption", f"{self.view.pet.display_name} · v{self.view.pet.version}")]
+        usage_line = self._usage_caption()
+        if usage_line:
+            header.append(("caption", usage_line))
         return [
-            ("caption", f"{self.view.pet.display_name} · v{self.view.pet.version}"),
+            *header,
             ("separator",),
             ("submenu", self.labels["menu.pets"], "pets"),
             ("submenu", self.labels["menu.language"], "language"),
@@ -2310,6 +2326,58 @@ class Overlay(Gtk.Window):
         self.quit(restart=True)
 
     # --------------------------------------------------------------- updating
+
+    def _usage_caption(self) -> str | None:
+        """The menu's usage line, or None when there is nothing to show yet.
+
+        Read straight from `usage.read()`; nothing is computed. Absent means no
+        statusLine has reported a limit yet -- a fresh account, or no source at
+        all -- in which case the line is simply left out.
+        """
+        if not self.settings.get("usage", True):
+            return None
+        from . import usage
+
+        figures = usage.read()
+        if not figures or figures.get("five_hour_pct") is None:
+            return None
+        cost = figures.get("cost_usd")
+        if cost is not None:
+            return self.labels["usage.line_cost"].format(
+                five=figures["five_hour_pct"],
+                seven=figures.get("seven_day_pct") if figures.get("seven_day_pct") is not None else "?",
+                cost=f"{cost:.2f}",
+            )
+        return self.labels["usage.line"].format(
+            five=figures["five_hour_pct"],
+            seven=figures.get("seven_day_pct") if figures.get("seven_day_pct") is not None else "?",
+        )
+
+    def _check_usage_once(self) -> bool:
+        """Warn once per 5h window when its limit crosses the threshold."""
+        if not self.settings.get("usage", True):
+            return False
+        from . import usage
+
+        figures = usage.read()
+        if not figures:
+            return False
+        pct = figures.get("five_hour_pct")
+        window = figures.get("five_hour_resets_at")
+        try:
+            threshold = int(self.settings.get("usage_warn_percent") or 90)
+        except (TypeError, ValueError):
+            threshold = 90
+        if pct is None or pct < threshold:
+            return False
+        # Once per window: keyed by the window's reset time, so a new 5h window
+        # (a different resets_at) is warned about afresh, and the same one is
+        # not nagged about every couple of minutes.
+        if window is not None and window == self.usage_warned_window:
+            return False
+        self.usage_warned_window = window
+        self._flash(self.labels["toast.usage_warn"].format(five=pct), seconds=6.0)
+        return False
 
     def _schedule_update_check(self) -> None:
         if not self.settings.get("update_check", True):

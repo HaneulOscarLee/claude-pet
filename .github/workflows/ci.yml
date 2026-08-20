@@ -53,6 +53,10 @@ jobs:
       - name: Update logic tests
         run: python3 tests/test_update.py
 
+      # Reading Claude Code's usage figures from the statusLine JSON.
+      - name: Usage figures tests
+        run: python3 tests/test_usage.py
+
       # Placement arithmetic, against a stand-in for the screen layout.
       - name: Geometry tests
         run: python3 tests/test_geometry.py

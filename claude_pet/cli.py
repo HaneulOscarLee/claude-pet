@@ -539,6 +539,49 @@ def _hook_events_installed() -> int:
     )
 
 
+def _statusline_command() -> str:
+    return f"{launcher_path()} statusline"
+
+
+def _statusline_is_ours(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    command = value.get("command")
+    return isinstance(command, str) and HOOK_MARKER in command and "statusline" in command
+
+
+def _install_statusline(path: Path) -> str:
+    """Claim the statusLine slot for usage capture, but only if it is free.
+
+    The slot holds one command and whoever owns it controls the status bar, so
+    an existing one -- oh-my-claudecode, or the user's own -- is never
+    displaced: its figures are read from its cache instead. This runs only for
+    someone who has no status line at all, for whom ours is a small addition
+    rather than a takeover, and `uninstall-hooks` removes only what it wrote.
+
+    Returns "installed", "already", "kept" (someone else owns it), or "".
+    """
+    settings = _read_settings(path)
+    existing = settings.get("statusLine")
+    if _statusline_is_ours(existing):
+        return "already"
+    if existing:
+        return "kept"
+    settings["statusLine"] = {"type": "command", "command": _statusline_command()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    return "installed"
+
+
+def _uninstall_statusline(path: Path) -> bool:
+    settings = _read_settings(path)
+    if not _statusline_is_ours(settings.get("statusLine")):
+        return False
+    settings.pop("statusLine", None)
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
 def _install_toml_hooks(path: Path, agent_id: str) -> int:
     """Append our hooks to a TOML settings file, between markers.
 
@@ -673,6 +716,15 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
         if not quiet:
             note = f"added {added} event(s)" if added else "already installed"
             print(f"  {agents.label(agent_id):<12} {path}  {note}")
+        # Usage figures (5h/weekly %, cost) arrive only through Claude's
+        # statusLine, so claim it for that -- but only if nothing else holds
+        # it. Claude only; the others emit no such figures.
+        if agent_id == "claude":
+            outcome = _install_statusline(path)
+            if not quiet and outcome == "installed":
+                print(f'  {"":<12} usage line installed (statusLine)')
+            elif not quiet and outcome == "kept":
+                print(f'  {"":<12} statusLine already set; usage read from it instead')
     return status
 
 
@@ -690,6 +742,8 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
                     print(f'{path}: removed the claude-pet hooks')
                 continue
             status |= _uninstall_hooks_from(path)
+            if agent_id == "claude" and _uninstall_statusline(path):
+                print(f"{path}: removed the usage statusLine")
         return status
     return _uninstall_hooks_from(_settings_file(True))
 
@@ -1433,6 +1487,12 @@ def build_parser() -> argparse.ArgumentParser:
     fix_terminal.add_argument("--undo", action="store_true", help="remove the wrappers again")
     fix_terminal.set_defaults(func=cmd_fix_terminal)
 
+    statusline = subparsers.add_parser(
+        "statusline",
+        help="(internal) capture Claude Code's usage figures from a statusLine render",
+    )
+    statusline.set_defaults(func=cmd_statusline)
+
     hook = subparsers.add_parser("hook", help="(internal) handle a hook event")
     hook.add_argument("event", nargs="?")
     hook.set_defaults(func=cmd_hook)
@@ -1519,6 +1579,38 @@ def cmd_hook(args: argparse.Namespace) -> int:
     from . import hook
 
     return hook.main([args.event] if args.event else [])
+
+
+def cmd_statusline(_args: argparse.Namespace) -> int:
+    """Claude Code hands this its render JSON on stdin, every frame.
+
+    We are only here for the usage figures it carries -- the one channel they
+    come through -- so we stash them and print a short line back. Always exits
+    0 and never lets an error escape: the status bar is waiting on our stdout,
+    and a traceback there is worse than a blank line.
+    """
+    from . import usage
+
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        raw = ""
+    figures = usage.capture(raw)
+    # The line Claude Code prints in the status bar. Kept plain and short --
+    # whoever installed our statusline had none before, so this is a small
+    # bonus rather than something replacing their own.
+    if figures:
+        parts = []
+        if figures.get("five_hour_pct") is not None:
+            parts.append(f"5h {figures['five_hour_pct']}%")
+        if figures.get("seven_day_pct") is not None:
+            parts.append(f"7d {figures['seven_day_pct']}%")
+        if figures.get("cost_usd") is not None:
+            parts.append(f"${figures['cost_usd']:.2f}")
+        print(" · ".join(parts) if parts else "")
+    else:
+        print("")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

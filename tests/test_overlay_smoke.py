@@ -209,6 +209,52 @@ def checks() -> list[tuple[str, bool]]:
             results.append((f"the {page} menu fits with the pet at the {where}"
                             f" ({natural.width}x{natural.height} at {top})", inside))
 
+    # Usage figures in the menu, and the once-per-window 5h warning. Read is
+    # stubbed so the test does not depend on any statusLine cache being around.
+    from claude_pet import usage as _usage
+    real_read = _usage.read
+    try:
+        _usage.read = lambda: {"five_hour_pct": 95, "seven_day_pct": 40,
+                               "five_hour_resets_at": 111, "cost_usd": 3.5}
+        window.settings["usage"] = True
+        window.settings["usage_warn_percent"] = 90
+        cap = window._usage_caption()
+        results.append((f"the usage line is built ({cap})",
+                        cap is not None and "95" in cap))
+        model = window._menu_model("main")
+        captions = [e[1] for e in model if e[0] == "caption"]
+        results.append(("...and appears in the menu",
+                        any("95" in c for c in captions)))
+
+        window.usage_warned_window = None
+        window._check_usage_once()
+        fired = window.usage_warned_window == 111
+        window._check_usage_once()  # same window: must not re-arm/re-flash
+        results.append(("a 5h limit over the threshold warns once", fired))
+        results.append(("...and not again for the same window",
+                        window.usage_warned_window == 111))
+
+        # A new 5h window (different resets_at) warns afresh.
+        _usage.read = lambda: {"five_hour_pct": 96, "seven_day_pct": 40,
+                               "five_hour_resets_at": 222, "cost_usd": 3.5}
+        window._check_usage_once()
+        results.append(("...but a fresh window warns again",
+                        window.usage_warned_window == 222))
+
+        # Under the threshold: silence, and the line still shows.
+        _usage.read = lambda: {"five_hour_pct": 10, "five_hour_resets_at": 333}
+        window.usage_warned_window = None
+        window._check_usage_once()
+        results.append(("under the threshold does not warn",
+                        window.usage_warned_window is None))
+
+        # Turned off: no line at all.
+        window.settings["usage"] = False
+        results.append(("usage off hides the line", window._usage_caption() is None))
+    finally:
+        _usage.read = real_read
+        window.settings["usage"] = True
+
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]
