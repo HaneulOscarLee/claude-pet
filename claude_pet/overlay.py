@@ -98,6 +98,7 @@ LABELS: dict[str, dict[str, str]] = {
         "usage.line": "5h {five}% · 7d {seven}%",
         "usage.line_cost": "5h {five}% · 7d {seven}% · ${cost}",
         "toast.usage_warn": "5h limit {five}%",
+        "toast.bridge_relogin": "log out & back in to finish setup",
         "menu.behaviour": "Behaviour…",
         "menu.tuning": "Tuning…",
         "menu.tune_reset": "Reset to defaults",
@@ -190,6 +191,7 @@ LABELS: dict[str, dict[str, str]] = {
         "usage.line": "5시간 {five}% · 주간 {seven}%",
         "usage.line_cost": "5시간 {five}% · 주간 {seven}% · ${cost}",
         "toast.usage_warn": "5시간 한도 {five}%",
+        "toast.bridge_relogin": "로그아웃 후 다시 로그인하면 완료",
         "menu.tuning": "세부 조정…",
         "menu.tune_reset": "기본값으로",
         "tune.throw_flick": "던지기 · 필요한 세기",
@@ -549,6 +551,10 @@ class Overlay(Gtk.Window):
             # First look soon after start, then every couple of minutes.
             GLib.timeout_add_seconds(15, self._check_usage_once)
             GLib.timeout_add_seconds(120, lambda: self._check_usage_once() or True)
+            # If the pointer bridge is installed but not yet loaded (a fresh
+            # install or a menu update, which cannot re-login for you),
+            # say so once -- the only channel those paths have.
+            GLib.timeout_add_seconds(8, self._remind_bridge_relogin)
         self._schedule_frame()
 
     # ---------------------------------------------------------------- window
@@ -2391,6 +2397,23 @@ class Overlay(Gtk.Window):
             return False
         self.usage_warned_window = window
         self._flash(self.labels["toast.usage_warn"].format(five=pct), seconds=6.0)
+        return False
+
+    def _remind_bridge_relogin(self) -> bool:
+        """Once, when the bridge is installed but a re-login has not loaded it.
+
+        Installing the extension does not activate it -- GNOME loads them only
+        at login -- so setup, a manual install, and a menu-driven update all
+        leave it dormant until then. The terminal paths print that; a menu
+        update has no terminal, so the pet is the one place left to say it.
+        """
+        try:
+            from . import shellext
+
+            if shellext.supported_here() and shellext.installed() and not shellext.active():
+                self._flash(self.labels["toast.bridge_relogin"], seconds=8.0)
+        except Exception:  # noqa: BLE001
+            pass
         return False
 
     def _schedule_update_check(self) -> None:

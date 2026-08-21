@@ -265,6 +265,7 @@ def update(check_only: bool = False) -> int:
             print(f"  {line}")
 
     _report_new_requirements()
+    _ensure_pointer_bridge()
     _restart_overlay()
     return 0
 
@@ -297,6 +298,7 @@ def apply() -> str:
         return "current"
     print(f"updated : {before} -> {after}")
     _report_new_requirements()
+    _ensure_pointer_bridge()
     return "updated"
 
 
@@ -417,6 +419,7 @@ def _update_package(current: str) -> int:
 
     print(f"updated : {current} -> {latest}")
     _report_new_requirements()
+    _ensure_pointer_bridge()
     _restart_overlay()
     return 0
 
@@ -430,6 +433,22 @@ def _graphical_installer() -> list[str] | None:
     if shutil.which("gdebi-gtk"):
         return ["gdebi-gtk"]
     return None
+
+
+def _ensure_pointer_bridge() -> None:
+    """Lay down the Wayland pointer bridge on update, as setup does.
+
+    Idempotent and GNOME/Wayland-only; installing does not activate it, so the
+    overlay reminds the user to log out and back in on its next start -- which
+    is the only channel a menu-driven update has.
+    """
+    try:
+        from . import shellext
+
+        if shellext.ensure() == "installed":
+            print("installed the pointer bridge; log out and back in to finish it")
+    except Exception:  # noqa: BLE001 -- never let this fail an update
+        pass
 
 
 def _restart_overlay() -> None:

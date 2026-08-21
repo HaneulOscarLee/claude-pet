@@ -119,6 +119,25 @@ def install_checks() -> list[tuple[str, bool]]:
         results.append(("...leaving the others alone",
                         "ding@rastersoft.com" in settings.names))
         results.append(("removing again is not an error", not shellext.uninstall()))
+
+        # ensure(): idempotent lay-down used by setup and update.
+        import os as _os
+        was = _os.environ.get("XDG_CURRENT_DESKTOP"), _os.environ.get("XDG_SESSION_TYPE")
+        _os.environ["XDG_CURRENT_DESKTOP"] = "ubuntu:GNOME"
+        _os.environ["XDG_SESSION_TYPE"] = "wayland"
+        try:
+            results.append(("ensure installs when missing", shellext.ensure() == "installed"))
+            results.append(("...and is idempotent the second time",
+                            shellext.ensure() == "already"))
+            _os.environ["XDG_SESSION_TYPE"] = "x11"
+            results.append(("ensure is a no-op off Wayland",
+                            shellext.ensure() == "unsupported"))
+        finally:
+            for k, v in zip(("XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE"), was):
+                if v is None:
+                    _os.environ.pop(k, None)
+                else:
+                    _os.environ[k] = v
     return results
 
 

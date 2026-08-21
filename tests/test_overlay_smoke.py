@@ -302,6 +302,31 @@ def checks() -> list[tuple[str, bool]]:
         _jump.to_session = real_to_session
         window.state = "idle"; window.locator = None
 
+    # The re-login reminder: fires only when the bridge is installed but not
+    # yet active (the "menu update / fresh install, log in to finish" state),
+    # and stays quiet otherwise. It flashes, so we watch flash_until move.
+    from claude_pet import shellext as _sx
+    saved = (_sx.supported_here, _sx.installed, _sx.active)
+    try:
+        _sx.supported_here = lambda: True
+        _sx.installed = lambda: True
+        _sx.active = lambda: False           # installed but not loaded yet
+        window.flash_until = 0.0
+        window._remind_bridge_relogin()
+        results.append(("installed-but-inactive bridge prompts a re-login",
+                        window.flash_until > _t2.monotonic()))
+        _sx.active = lambda: True            # already loaded -> silent
+        window.flash_until = 0.0
+        window._remind_bridge_relogin()
+        results.append(("an active bridge says nothing", window.flash_until == 0.0))
+        _sx.supported_here = lambda: False   # not GNOME/Wayland -> silent
+        _sx.active = lambda: False
+        window._remind_bridge_relogin()
+        results.append(("off a supported desktop it says nothing",
+                        window.flash_until == 0.0))
+    finally:
+        _sx.supported_here, _sx.installed, _sx.active = saved
+
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]

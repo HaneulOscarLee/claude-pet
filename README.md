@@ -439,6 +439,11 @@ callable from anywhere. It watches nothing, owns no bus name of its own, and
 comes off again with `--undo`. The log out is not optional: GNOME reads its
 extensions once, at startup.
 
+`setup` and every update lay this down for you on GNOME/Wayland, so
+`fix-pointer` by hand is rarely needed — but the log out still is, and the pet
+says so once on its next start when the bridge is installed but not yet
+loaded.
+
 The pet asks X11 first and only falls back to the bridge once X11 has lost
 sight, so in the ordinary case the compositor is not asked at all. Without the
 bridge it still knows when not to believe what it is told, and walks nowhere

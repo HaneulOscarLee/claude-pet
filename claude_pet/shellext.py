@@ -116,6 +116,39 @@ def install() -> bool:
     return True
 
 
+def ensure() -> str:
+    """Put the extension on disk where it helps, idempotently.
+
+    For setup and update, which both want "and calling works from anywhere"
+    to hold without a separate step. Does not and cannot activate it -- GNOME
+    loads extensions only at login -- so a caller that installs it should tell
+    the user to log out and back in. The overlay also reminds them on its next
+    start, which covers the update-from-the-menu path where there is no
+    terminal to print to.
+
+    Returns "installed" (just now), "already" (was there), "unsupported"
+    (not GNOME, or not Wayland), or "failed".
+    """
+    if not supported_here():
+        return "unsupported"
+    if installed():
+        return "already"
+    return "installed" if install() else "failed"
+
+
+def active() -> bool:
+    """Whether the extension is not just installed but answering.
+
+    Installed-but-not-active is the "needs a re-login" state, and telling the
+    two apart is the whole point of the reminder.
+    """
+    if not (supported_here() and installed()):
+        return False
+    from . import pointer
+
+    return pointer.bridge_present()
+
+
 def uninstall() -> bool:
     removed = False
     target = install_path()

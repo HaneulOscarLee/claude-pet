@@ -1326,6 +1326,16 @@ def _finish_setup(install_deps: bool = True) -> int:
         print("installing hooks...")
         cmd_install_hooks(argparse.Namespace(project=False))
 
+    # Being callable from over any window on Wayland needs the shell bridge,
+    # which is GNOME-only and takes a re-login to load. Laid down here so "run
+    # setup and it works" holds, rather than being a separate step nobody
+    # knows to take.
+    from . import shellext
+
+    if shellext.ensure() == "installed":
+        print("installing the pointer bridge (lets the pet be called from anywhere)...")
+        print("  log out and back in to finish it — GNOME loads extensions at login")
+
     if not running:
         print("starting the pet...")
         pid = launch.spawn_detached(reason="doctor --fix")
