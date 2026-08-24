@@ -150,10 +150,83 @@ def throw_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def l_shaped_checks() -> list[tuple[str, bool]]:
+    """A throw must bounce off the screens, not off the box around them.
+
+    Reported on three monitors in a "ㄱ": two across the top, one below the
+    right-hand pair. The bounding box of the three covers a bottom-left corner
+    with no screen behind it, and a rectangle cannot say so -- so a throw aimed
+    down-left sailed into the hole and settled there, out of sight.
+    """
+    MONITORS = ((0, 0, 1920, 1080), (1920, 0, 1920, 1080), (1920, 1080, 1920, 1080))
+    EDGE, WIDE, TALL = 12, 122, 132
+    span = (EDGE, 0, 3840 - EDGE - WIDE, 2160 - EDGE - TALL)
+
+    def on_screen(x, y):
+        return any(x + WIDE > mx and x < mx + mw and y + TALL > my and y < my + mh
+                   for mx, my, mw, mh in MONITORS)
+
+    def clamp(x, y):
+        best = None
+        for mx, my, mw, mh in MONITORS:
+            left, top = mx + EDGE, my
+            right = max(left, mx + mw - EDGE - WIDE)
+            bottom = max(top, my + mh - EDGE - TALL)
+            near_x, near_y = min(max(x, left), right), min(max(y, top), bottom)
+            distance = (near_x - x) ** 2 + (near_y - y) ** 2
+            if best is None or distance < best[0]:
+                best = (distance, near_x, near_y)
+        return best[1], best[2]
+
+    def fly(velocity, start, use_clamp):
+        throw = motion.Throw(*velocity)
+        x, y = float(start[0]), float(start[1])
+        strayed = False
+        for _ in range(200):
+            if not throw.moving:
+                break
+            x, y = throw.step(x, y, span, 0.05,
+                              **({"clamp": clamp} if use_clamp else {}))
+            if not on_screen(x, y):
+                strayed = True
+        return (x, y), strayed
+
+    results = []
+    # The reported throw: hurled down and to the left, straight at the hole.
+    (x, y), strayed = fly((-3000, 2600), (1900, 900), use_clamp=True)
+    results.append((f"a throw at the empty corner stays on a screen ({int(x)},{int(y)})",
+                    on_screen(x, y)))
+    results.append(("...and never crosses it on the way", not strayed))
+
+    # The same throw without the clamp is the bug, stated so the fix cannot
+    # quietly come undone.
+    (bx, by), _ = fly((-3000, 2600), (1900, 900), use_clamp=False)
+    results.append((f"...where the plain rectangle loses it ({int(bx)},{int(by)})",
+                    not on_screen(bx, by)))
+
+    # Every direction, from each screen, since only one throw was reported.
+    for velocity in ((-6000, 6000), (-4000, 4000), (0, 6000), (-6000, 0), (5000, 5000)):
+        for start in ((1900, 900), (100, 100), (2500, 1600)):
+            (fx, fy), stray = fly(velocity, start, use_clamp=True)
+            results.append((f"thrown {velocity} from {start} it stays on screen",
+                            on_screen(fx, fy) and not stray))
+
+    # And it still settles rather than skating about forever.
+    throw = motion.Throw(-6000, 6000)
+    x, y, ticks = 1900.0, 900.0, 0
+    while throw.moving and ticks < 200:
+        x, y = throw.step(x, y, span, 0.05, clamp=clamp)
+        ticks += 1
+    results.append((f"a bounced throw still comes to rest ({ticks * 0.05:.1f}s)",
+                    not throw.moving))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("flick", flick_checks()), ("flight", throw_checks())):
+    for label, results in (("flick", flick_checks()), ("flight", throw_checks()),
+                            ("L-shaped", l_shaped_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

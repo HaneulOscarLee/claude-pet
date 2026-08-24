@@ -76,15 +76,26 @@ class Throw:
         return abs(self.velocity_x) + abs(self.velocity_y) >= SETTLE_SPEED
 
     def step(
-        self, x: float, y: float, bounds: tuple[int, int, int, int], seconds: float
+        self,
+        x: float,
+        y: float,
+        bounds: tuple[int, int, int, int],
+        seconds: float,
+        clamp=None,
     ) -> tuple[float, float]:
-        """Advance by `seconds`, bouncing inside `bounds` (left, top, right, bottom).
+        """Advance by `seconds`, bouncing off the edge of where it may be.
 
         Time-based rather than per-frame: the animation rate is a user setting,
         and a throw that travelled further on a faster pet would be a strange
         thing to have built.
+
+        `bounds` is the simple case -- one rectangle, which is what a single
+        screen or a row of them is. `clamp` is for when the walls are not a
+        rectangle: give it a function that pulls a point back to the nearest
+        legal spot and the bounce follows those walls instead. Three monitors
+        in an L have a corner with no screen behind it, and a rectangle cannot
+        describe that, so a throw sailed straight into it.
         """
-        left, top, right, bottom = bounds
         decay = self.friction**seconds
 
         # The exact integral of v·FRICTION^t over the step, rather than
@@ -99,6 +110,27 @@ class Throw:
         self.velocity_x *= decay
         self.velocity_y *= decay
 
+        if clamp is not None:
+            # Whatever the shape of the allowed area, the wall is wherever the
+            # clamp had to move the point. Reflect on each axis it moved on, so
+            # the pet bounces off the inside corner of an L exactly as it does
+            # off the edge of a screen.
+            legal_x, legal_y = clamp(x, y)
+            if legal_x != x:
+                # Away from the wall it hit, not simply reversed: reversing
+                # would send it back out again when the clamp pushed it along.
+                self.velocity_x = abs(self.velocity_x) * self.bounce
+                if legal_x < x:
+                    self.velocity_x = -self.velocity_x
+                x = legal_x
+            if legal_y != y:
+                self.velocity_y = abs(self.velocity_y) * self.bounce
+                if legal_y < y:
+                    self.velocity_y = -self.velocity_y
+                y = legal_y
+            return x, y
+
+        left, top, right, bottom = bounds
         if x <= left:
             x, self.velocity_x = left, abs(self.velocity_x) * self.bounce
         elif x >= right:

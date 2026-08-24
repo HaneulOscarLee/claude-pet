@@ -1305,7 +1305,12 @@ class Overlay(Gtk.Window):
         elapsed = max(0.001, min(0.2, now - self.thrown_at))
         self.thrown_at = now
 
-        x, y = self.throw.step(self.sprite_x, self.sprite_y, bounds, elapsed)
+        # Bounced off the screens themselves, not off the box around them: an
+        # L-shaped layout has a corner with no screen behind it, and a
+        # rectangle cannot say so -- a throw sailed straight into it.
+        x, y = self.throw.step(
+            self.sprite_x, self.sprite_y, bounds, elapsed, clamp=self._clamp_across
+        )
         self._place_sprite(int(round(x)), int(round(y)), across_screens=True)
 
         if self.throw.moving:
