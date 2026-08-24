@@ -545,6 +545,13 @@ agent inside tmux — the pet then jumps to the exact pane. tmux is the only way
 to land on a *particular* place inside a terminal, since tabs and splits are
 widgets rather than windows and nothing outside can address them.
 
+A jump never takes a session away from another window. If a client is already
+attached to the target's session, the window is selected and nobody is moved;
+otherwise a client is lent only when its own session has another client
+watching it, and named explicitly rather than left to tmux to choose — an
+unnamed `switch-client` picks a client itself, and picks one watching
+something else.
+
 ## Sprite packs
 
 Any pack from [codex-pets.net](https://codex-pets.net/) works, in either atlas

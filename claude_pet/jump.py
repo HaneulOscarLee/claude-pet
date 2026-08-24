@@ -82,13 +82,78 @@ def _tmux_jump(locator: dict[str, Any]) -> JumpResult | None:
         base += ["-S", str(socket)]
 
     # select-window first so the pane's window becomes current, then the pane.
-    # switch-client only matters when the pane lives in another session.
     ok = _run(base + ["select-window", "-t", str(pane)])
     ok = _run(base + ["select-pane", "-t", str(pane)]) or ok
-    _run(base + ["switch-client", "-t", str(pane)])
+
+    # And only then, if nobody is already looking at that session, hand exactly
+    # one client to it.
+    #
+    # `switch-client -t <pane>` with no `-c` was the bug: run from outside tmux
+    # there is no current client, so tmux picks one itself -- and it picks a
+    # client watching something else entirely. Measured on tmux 3.4: a client
+    # on session `beta` was moved to `alpha` by a jump aimed at a pane in
+    # `alpha`. Someone with a terminal per session saw their windows dragged
+    # one by one onto whichever session the pet had just pointed at, which is
+    # the "all my sessions turned into the same session" report.
+    if not _tmux_session_shown(base, pane):
+        client = _tmux_spare_client(base, pane)
+        if client:
+            _run(base + ["switch-client", "-c", client, "-t", str(pane)])
     if ok:
         return JumpResult(True, f"switched to {pane}")
     return JumpResult(False, f"tmux could not select {pane}")
+
+
+def _tmux_query(base: list[str], argv: list[str]) -> str:
+    try:
+        return subprocess.run(  # noqa: S603 - fixed argv
+            base + argv, capture_output=True, text=True,
+            timeout=TIMEOUT_SECONDS, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _tmux_session_shown(base: list[str], pane: str) -> bool:
+    """Whether some client is already attached to the pane's own session.
+
+    If one is, selecting the window was enough -- that client is now showing
+    the pane, and moving anybody else would only take a window away from
+    whoever was using it.
+    """
+    return bool(_tmux_query(base, ["list-clients", "-t", str(pane), "-F", "#{client_name}"]).split())
+
+
+def _tmux_spare_client(base: list[str], pane: str) -> str | None:
+    """A client that can be lent to the pane's session, or None to leave well alone.
+
+    Only a client whose own session has no *other* client is offered: moving it
+    inconveniences nobody else, since it is the only pair of eyes there. When
+    every client is the sole viewer of its session there is nothing safe to
+    move, and the jump settles for having selected the window -- better than
+    yanking a session out from under another window.
+    """
+    session_of: dict[str, str] = {}
+    for line in _tmux_query(
+        base, ["list-clients", "-F", "#{client_name}\t#{client_session}"]
+    ).splitlines():
+        name, _, session = line.partition("\t")
+        if name and session:
+            session_of[name] = session
+    if not session_of:
+        return None
+    target = _tmux_query(
+        base, ["display-message", "-p", "-t", str(pane), "#{session_name}"]
+    ).strip()
+    counts: dict[str, int] = {}
+    for session in session_of.values():
+        counts[session] = counts.get(session, 0) + 1
+    # Prefer a client that is one of several on its session: taking it away
+    # leaves that session still visible to somebody.
+    for name, session in session_of.items():
+        if session != target and counts.get(session, 0) > 1:
+            return name
+    return None
 
 
 def _tmux_client_pids(locator: dict[str, Any]) -> list[int]:

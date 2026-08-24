@@ -186,11 +186,120 @@ def end_to_end_checks() -> list[tuple[str, bool]]:
     return results
 
 
+class Tmux:
+    """Answer tmux queries from a fixed picture, and record what was run.
+
+    A stand-in rather than a real server: what is under test is which client
+    the jump decides to move, and the deciding is all in the query answers.
+    """
+
+    def __init__(self, clients: dict[str, str], target_session: str) -> None:
+        #: client name -> the session it is attached to.
+        self.clients = clients
+        self.target_session = target_session
+        self.ran: list[list[str]] = []
+
+    def __enter__(self):
+        self.real_query = jump._tmux_query
+        self.real_run = jump._run
+        self.real_which = jump.shutil.which
+
+        def query(base, argv):
+            if argv[0] == "list-clients" and "-t" in argv:
+                # Clients on the target's own session.
+                names = [n for n, s in self.clients.items() if s == self.target_session]
+                return "\n".join(names)
+            if argv[0] == "list-clients":
+                return "\n".join(f"{n}\t{s}" for n, s in self.clients.items())
+            if argv[0] == "display-message":
+                return self.target_session
+            return ""
+
+        def run(argv):
+            self.ran.append(argv)
+            if argv[1:3] == ["switch-client", "-c"] or "switch-client" in argv:
+                # Apply it, so the test can see who ended up where.
+                if "-c" in argv:
+                    who = argv[argv.index("-c") + 1]
+                    self.clients[who] = self.target_session
+            return True
+
+        jump._tmux_query = query
+        jump._run = run
+        jump.shutil.which = lambda name: "/usr/bin/" + name
+        return self
+
+    def __exit__(self, *_exc):
+        jump._tmux_query = self.real_query
+        jump._run = self.real_run
+        jump.shutil.which = self.real_which
+
+    def switched(self):
+        return [a for a in self.ran if "switch-client" in a]
+
+
+def tmux_checks() -> list[tuple[str, bool]]:
+    """Which client a jump is allowed to move.
+
+    Reported as every session turning into the same session. `switch-client
+    -t <pane>` was called with no `-c`, and run from outside tmux there is no
+    current client -- so tmux chose one itself, and chose a client watching
+    something else. Reproduced on tmux 3.4: a client on `beta` was dragged to
+    `alpha` by a jump aimed at a pane in `alpha`, and windows piled onto
+    whichever session the pet last pointed at.
+    """
+    locator = {"tmux_pane": "%0", "tmux_socket": "/tmp/s"}
+    results = []
+
+    # Somebody is already on the target's session: select the window and move
+    # nobody. This is the case that was hijacking a bystander.
+    with Tmux({"a": "target", "b": "other"}, "target") as tmux:
+        jump._tmux_jump(locator)
+        results.append(("with the session already shown, no client is moved",
+                        not tmux.switched()))
+        results.append(("...and the bystander stays where it was",
+                        tmux.clients == {"a": "target", "b": "other"}))
+        results.append(("...the window was still selected",
+                        any("select-window" in a for a in tmux.ran)))
+
+    # Nobody on the target session, and every client is the only pair of eyes
+    # on its own: moving any of them would take a session away from someone,
+    # so nothing is moved.
+    with Tmux({"a": "one", "b": "two"}, "target") as tmux:
+        jump._tmux_jump(locator)
+        results.append(("when every client is a sole viewer, none is taken",
+                        not tmux.switched()))
+        results.append(("...so no window is hijacked",
+                        tmux.clients == {"a": "one", "b": "two"}))
+
+    # Two clients share a session, so one can be lent without anybody losing
+    # sight of it.
+    with Tmux({"a": "shared", "b": "shared", "c": "elsewhere"}, "target") as tmux:
+        jump._tmux_jump(locator)
+        moved = tmux.switched()
+        results.append((f"a spare client is lent when one can be ({len(moved)})",
+                        len(moved) == 1))
+        results.append(("...named explicitly, never left to tmux's choice",
+                        bool(moved) and "-c" in moved[0]))
+        lent = [n for n, s in tmux.clients.items() if s == "target"]
+        results.append((f"...exactly one client ends up there ({lent})", len(lent) == 1))
+        results.append(("...and the shared session still has a viewer",
+                        list(tmux.clients.values()).count("shared") == 1))
+        results.append(("...the unrelated client is untouched",
+                        tmux.clients["c"] == "elsewhere"))
+
+    # No clients at all: nothing to move, and nothing to crash on.
+    with Tmux({}, "target") as tmux:
+        jump._tmux_jump(locator)
+        results.append(("with no clients attached it just selects", not tmux.switched()))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
     for label, results in (("windows", window_checks()), ("locator", locator_checks()),
-                            ("end to end", end_to_end_checks())):
+                            ("end to end", end_to_end_checks()), ("tmux", tmux_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1
