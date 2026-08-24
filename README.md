@@ -444,6 +444,12 @@ extensions once, at startup.
 says so once on its next start when the bridge is installed but not yet
 loaded.
 
+Two formats ship, because GNOME 45 moved extensions to ES modules: the right
+one is chosen from the running shell's version, so **GNOME 42 (Ubuntu 22.04)
+through 48** are covered. A copy left behind in the wrong format — an install
+from before the older format was supported, which is present and inert — is
+replaced rather than mistaken for a working one.
+
 The pet asks X11 first and only falls back to the bridge once X11 has lost
 sight, so in the ordinary case the compositor is not asked at all. Without the
 bridge it still knows when not to believe what it is told, and walks nowhere

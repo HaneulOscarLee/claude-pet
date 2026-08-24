@@ -76,12 +76,24 @@ class Placer:
             max(a.y + a.height for a in self.monitors) - EDGE_MARGIN - SPRITE_H,
         )
 
+    def clamp_across(self, x: int, y: int) -> tuple[int, int]:
+        """Nearest spot actually on a screen, mirroring overlay._clamp_across."""
+        best = None
+        for a in self.monitors:
+            left, top = a.x + EDGE_MARGIN, a.y
+            right = max(left, a.x + a.width - EDGE_MARGIN - SPRITE_W)
+            bottom = max(top, a.y + a.height - EDGE_MARGIN - SPRITE_H)
+            nx = min(max(x, left), right)
+            ny = min(max(y, top), bottom)
+            d = (nx - x) ** 2 + (ny - y) ** 2
+            if best is None or d < best[0]:
+                best = (d, nx, ny)
+        return (x, y) if best is None else (best[1], best[2])
+
     def place_across(self, x: int, y: int) -> tuple[int, int]:
         """Placement for something crossing between screens, not staying on one."""
         area = self.workarea_for(x, y)
-        left, top, right, bottom = self.span()
-        x = min(max(x, left), right)
-        y = min(max(y, top), bottom)
+        x, y = self.clamp_across(x, y)
         self.bubble_below = y - area.y < BUBBLE_SPACE
         self.sprite_top = 0 if self.bubble_below else BUBBLE_SPACE
         self.pos_x, self.pos_y = x - SPRITE_LEFT, y - self.sprite_top
@@ -246,11 +258,66 @@ def errand_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def l_shaped_checks() -> list[tuple[str, bool]]:
+    """Three monitors in an L, and the hole that leaves.
+
+    Reported by someone running them arranged like a Korean "ㄱ": two across
+    the top and one below the right-hand pair. The bounding box of the three
+    covers a bottom-left corner with no screen behind it, and clamping
+    cross-screen movement into that box walked the pet off into it -- out of
+    sight, with no way to click it back.
+    """
+    top_left = Area(0, 0, 1920, 1080)
+    top_right = Area(1920, 0, 1920, 1080)
+    below_right = Area(1920, 1080, 1920, 1080)
+    placer = Placer([top_left, top_right, below_right])
+    results = []
+
+    # The hole is real: the box reaches it, no monitor does.
+    left, top, right, bottom = placer.span()
+    hole_x, hole_y = 200, 1600
+    inside_box = left <= hole_x <= right and top <= hole_y <= bottom
+    results.append(("the bounding box covers the empty corner", inside_box))
+    results.append(("...where no monitor is", not placer.on_screen(hole_x, hole_y)))
+
+    # Which is the bug, and the fix: clamping lands on a real screen instead.
+    x, y = placer.clamp_across(hole_x, hole_y)
+    results.append((f"a spot in the hole is pulled onto a screen ({x},{y})",
+                    placer.on_screen(x, y)))
+    # And onto the nearest one -- straight up to the monitor above it, not
+    # sideways across the desk.
+    results.append(("...the nearest one, not a distant one", x == hole_x))
+
+    # Every corner of the hole, since only one of them was reported.
+    for spot in ((0, 2000), (1900, 2100), (960, 1500), (10, 1090)):
+        cx, cy = placer.clamp_across(*spot)
+        results.append((f"{spot} is pulled onto a screen", placer.on_screen(cx, cy)))
+
+    # Somewhere already on a screen must not move at all, or this "fix" would
+    # be shoving the pet about on ordinary layouts.
+    for spot in ((100, 100), (2500, 500), (2500, 1600)):
+        results.append((f"{spot} is already fine and is left alone",
+                        placer.clamp_across(*spot) == spot))
+
+    # Placement goes through it, so a throw or an errand cannot end in the hole.
+    px, py = placer.place_across(hole_x, hole_y)
+    results.append(("placing across screens cannot land in the hole",
+                    placer.on_screen(px, py)))
+
+    # A plain side-by-side pair is unaffected: the box has no hole, so every
+    # answer is the same as before.
+    flat = Placer([PRIMARY, SECOND])
+    for spot in ((800, 500), (2500, 500), (3000, 900)):
+        results.append((f"side by side, {spot} is unchanged",
+                        flat.clamp_across(*spot) == spot))
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
     for label, results in (("top edge", top_checks()), ("monitors", monitor_checks()),
-                            ("errands", errand_checks())):
+                            ("errands", errand_checks()), ("L-shaped", l_shaped_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

@@ -36,12 +36,48 @@ def install_path() -> Path:
     return extensions_dir() / UUID
 
 
+def shell_version() -> int | None:
+    """The running GNOME Shell's major version, or None if it cannot be asked.
+
+    Which format the extension has to be in depends on it, and getting that
+    wrong is silent: the shell simply never loads it.
+    """
+    try:
+        out = subprocess.run(
+            ["gnome-shell", "--version"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    digits = ""
+    for part in out.split():
+        head = part.split(".")[0]
+        if head.isdigit():
+            digits = head
+            break
+    return int(digits) if digits else None
+
+
+#: GNOME 45 moved extensions to ES modules and a class extending Extension.
+#: Before that they are plain `imports.*` scripts with an `init()`. A 45+
+#: extension does not load at all on an older shell, and nothing says why --
+#: which is how the bridge appeared installed and dead on Ubuntu 22.04
+#: (GNOME 42).
+ESM_SINCE = 45
+
+
 def source_path() -> Path | None:
-    """The copy shipped with claude-pet, wherever it was installed from."""
+    """The copy shipped with claude-pet, in the format this shell can load."""
+    version = shell_version()
+    legacy = version is not None and version < ESM_SINCE
+    names = ("gnome-extension-legacy",) if legacy else ("gnome-extension",)
+    # If the matching one is missing from this install, the other is still
+    # better than nothing on a shell that might accept either.
+    names = names + ("gnome-extension", "gnome-extension-legacy")
     for root in (Path(__file__).resolve().parent.parent, Path("/usr/lib/claude-pet")):
-        candidate = root / "assets" / "gnome-extension" / UUID
-        if (candidate / "metadata.json").is_file():
-            return candidate
+        for name in names:
+            candidate = root / "assets" / name / UUID
+            if (candidate / "metadata.json").is_file():
+                return candidate
     return None
 
 
@@ -116,6 +152,26 @@ def install() -> bool:
     return True
 
 
+def installed_matches_shell() -> bool:
+    """Whether the copy on disk is in the format this shell can load.
+
+    An install done before the legacy variant existed left a 45+ extension on
+    a GNOME 42 machine, where it is inert. `ensure()` would call that "already"
+    and never fix it, so the format is compared rather than just the presence.
+    """
+    if not installed():
+        return False
+    try:
+        code = (install_path() / "extension.js").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    version = shell_version()
+    if version is None:
+        return True  # nothing to compare against; leave it alone
+    is_esm = "export default class" in code
+    return is_esm == (version >= ESM_SINCE)
+
+
 def ensure() -> str:
     """Put the extension on disk where it helps, idempotently.
 
@@ -132,7 +188,10 @@ def ensure() -> str:
     if not supported_here():
         return "unsupported"
     if installed():
-        return "already"
+        if installed_matches_shell():
+            return "already"
+        # Wrong format for this shell -- reinstall the right one over it.
+        return "installed" if install() else "failed"
     return "installed" if install() else "failed"
 
 

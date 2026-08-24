@@ -681,6 +681,38 @@ class Overlay(Gtk.Window):
             max(a.y + a.height for a in areas) - EDGE_MARGIN - self.view.height,
         )
 
+    def _clamp_across(self, x: int, y: int) -> tuple[int, int]:
+        """Nearest spot that is actually on a screen, anywhere across them all.
+
+        `_span()` is the bounding box of every monitor, which is the right
+        answer only when the monitors fill it. Arrange three in an L and they
+        do not: the box covers a corner with no screen behind it, and clamping
+        into that corner puts the pet somewhere the user cannot see -- reported
+        as it wandering off to the empty bottom-left.
+
+        So each monitor is asked where it would put the sprite, and the nearest
+        of those answers wins. A point already on a screen is its own answer
+        (distance nought) and comes back unchanged, so nothing about a plain
+        side-by-side layout changes.
+        """
+        best: tuple[float, int, int] | None = None
+        for area in self._monitors():
+            left = area.x + EDGE_MARGIN
+            top = area.y
+            # A monitor narrower or shorter than the sprite would give a right
+            # edge left of its left one; keep the range degenerate rather than
+            # inverted so the clamp stays inside the screen.
+            right = max(left, area.x + area.width - EDGE_MARGIN - self.view.width)
+            bottom = max(top, area.y + area.height - EDGE_MARGIN - self.view.height)
+            near_x = min(max(x, left), right)
+            near_y = min(max(y, top), bottom)
+            distance = (near_x - x) ** 2 + (near_y - y) ** 2
+            if best is None or distance < best[0]:
+                best = (distance, near_x, near_y)
+        if best is None:
+            return x, y
+        return best[1], best[2]
+
     def _place_sprite(self, x: int, y: int, across_screens: bool = False) -> None:
         """Put the *sprite* here, and work out where the window has to go.
 
@@ -693,9 +725,7 @@ class Overlay(Gtk.Window):
         """
         area = self._workarea_for_sprite(x, y)
         if across_screens:
-            left, top, right, bottom = self._span()
-            x = min(max(x, left), right)
-            y = min(max(y, top), bottom)
+            x, y = self._clamp_across(x, y)
         else:
             x = min(max(x, area.x), area.x + area.width - self.view.width)
             y = min(max(y, area.y), area.y + area.height - self.view.height)
@@ -1307,9 +1337,12 @@ class Overlay(Gtk.Window):
 
     def _advance_errand(self, elapsed: float = 0.1) -> None:
         """Walk toward wherever it was called to, then stop just short."""
-        left, top, right, bottom = self._span()
-        target_x = min(max(int(self.walk_target[0]), left), right)
-        target_y = min(max(int(self.walk_target[1]), top), bottom)
+        # Clamped to a screen rather than to the bounding box of them all: on
+        # an L-shaped layout the box has a corner with nothing behind it, and
+        # aiming into it walks the pet off where it cannot be seen.
+        target_x, target_y = self._clamp_across(
+            int(self.walk_target[0]), int(self.walk_target[1])
+        )
         remaining_x = target_x - self.sprite_x
         remaining_y = target_y - self.sprite_y
         distance = math.hypot(remaining_x, remaining_y)

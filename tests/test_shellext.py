@@ -60,6 +60,64 @@ class TempHome:
         self.dir.cleanup()
 
 
+def variant_checks() -> list[tuple[str, bool]]:
+    """Both formats ship, and the right one is picked for the running shell.
+
+    GNOME 45 moved extensions to ES modules. A 45+ extension does not load on
+    GNOME 42 (Ubuntu 22.04) and the shell says nothing about why, so the bridge
+    looked installed and was simply dead -- the pointer stayed unreadable over
+    a browser exactly as if it had never been installed.
+    """
+    results = []
+    root = Path(__file__).resolve().parent.parent
+    modern = root / "assets" / "gnome-extension" / shellext.UUID
+    legacy = root / "assets" / "gnome-extension-legacy" / shellext.UUID
+    results.append(("the modern (ESM) extension ships", (modern / "extension.js").is_file()))
+    results.append(("the legacy (pre-45) one ships too", (legacy / "extension.js").is_file()))
+    if not (modern / "metadata.json").is_file() or not (legacy / "metadata.json").is_file():
+        return results
+
+    modern_meta = json.loads((modern / "metadata.json").read_text())
+    legacy_meta = json.loads((legacy / "metadata.json").read_text())
+    results.append(("the legacy one declares GNOME 42",
+                    "42" in legacy_meta["shell-version"]))
+    results.append(("...and the modern one does not",
+                    "42" not in modern_meta["shell-version"]))
+    results.append(("they share the uuid, so only one is ever installed",
+                    legacy_meta["uuid"] == modern_meta["uuid"] == shellext.UUID))
+
+    legacy_code = (legacy / "extension.js").read_text()
+    modern_code = (modern / "extension.js").read_text()
+    # The formats are mutually exclusive, and mixing them is the failure.
+    results.append(("the legacy one uses the old imports form",
+                    "imports.gi" in legacy_code and "import " not in legacy_code))
+    results.append(("...and exports init()", "function init()" in legacy_code))
+    results.append(("the modern one is an ES module",
+                    "export default class" in modern_code))
+    results.append(("both answer with the compositor's pointer",
+                    "global.get_pointer()" in legacy_code
+                    and "global.get_pointer()" in modern_code))
+
+    # Version steering, with the shell's answer stubbed both ways.
+    real = shellext.shell_version
+    try:
+        shellext.shell_version = lambda: 42
+        results.append(("on GNOME 42 the legacy copy is chosen",
+                        shellext.source_path() == legacy))
+        shellext.shell_version = lambda: 46
+        results.append(("on GNOME 46 the modern copy is chosen",
+                        shellext.source_path() == modern))
+        shellext.shell_version = lambda: 44
+        results.append(("on GNOME 44 (still pre-ESM) the legacy copy is chosen",
+                        shellext.source_path() == legacy))
+        shellext.shell_version = lambda: None
+        results.append(("with no version to go on it still finds one",
+                        shellext.source_path() is not None))
+    finally:
+        shellext.shell_version = real
+    return results
+
+
 def shipped_checks() -> list[tuple[str, bool]]:
     """The copy in the repo has to be something the shell would actually load."""
     results = []
@@ -120,6 +178,37 @@ def install_checks() -> list[tuple[str, bool]]:
                         "ding@rastersoft.com" in settings.names))
         results.append(("removing again is not an error", not shellext.uninstall()))
 
+        # A copy in the wrong format for this shell must be replaced, not
+        # reported as "already" -- that is the state an older install left on
+        # Ubuntu 22.04: present, and inert.
+        import os as _os2
+        was2 = _os2.environ.get("XDG_CURRENT_DESKTOP"), _os2.environ.get("XDG_SESSION_TYPE")
+        real_ver = shellext.shell_version
+        _os2.environ["XDG_CURRENT_DESKTOP"] = "ubuntu:GNOME"
+        _os2.environ["XDG_SESSION_TYPE"] = "wayland"
+        try:
+            shellext.shell_version = lambda: 46
+            shellext.install()                      # lays down the ESM copy
+            results.append(("a matching format reads as matching",
+                            shellext.installed_matches_shell()))
+            results.append(("...so ensure leaves it alone", shellext.ensure() == "already"))
+
+            shellext.shell_version = lambda: 42     # same files, older shell
+            results.append(("the same copy on GNOME 42 reads as mismatched",
+                            not shellext.installed_matches_shell()))
+            results.append(("...and ensure replaces it", shellext.ensure() == "installed"))
+            code = (shellext.install_path() / "extension.js").read_text()
+            results.append(("...with the legacy format", "function init()" in code))
+            results.append(("...which then reads as matching",
+                            shellext.installed_matches_shell()))
+        finally:
+            shellext.shell_version = real_ver
+            for k, v in zip(("XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE"), was2):
+                if v is None:
+                    _os2.environ.pop(k, None)
+                else:
+                    _os2.environ[k] = v
+
         # ensure(): idempotent lay-down used by setup and update.
         import os as _os
         was = _os.environ.get("XDG_CURRENT_DESKTOP"), _os.environ.get("XDG_SESSION_TYPE")
@@ -168,7 +257,8 @@ def where_checks() -> list[tuple[str, bool]]:
 def main() -> int:
     failures = 0
     total = 0
-    for label, results in (("shipped", shipped_checks()), ("install", install_checks()),
+    for label, results in (("variants", variant_checks()),
+                            ("shipped", shipped_checks()), ("install", install_checks()),
                             ("where", where_checks())):
         print(f"{label}:")
         for name, ok in results:
