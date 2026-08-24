@@ -343,12 +343,14 @@ have spent on every request — which Claude Code carries into the JSON it hands
 its `statusLine` on every render. That JSON is the only place the figures
 appear; the hooks never see them and the transcripts do not carry them.
 
-- If you already run a status line (**oh-my-claudecode**, or your own),
-  claude-pet reads the figures from its cache and leaves your status line
-  alone.
-- If you have **no** status line, `install-hooks` claims the slot with a tiny
-  one (`5h 15% · 7d 9% · $24.73`) purely to capture the figures; `uninstall-hooks`
-  removes only what it wrote.
+- With **oh-my-claudecode**, its cache already carries the figures and is read
+  as-is; your status line is left alone.
+- With **your own** status line, it is *wrapped*: claude-pet captures the JSON
+  on its way past and then runs your command with the same input, printing its
+  output — your bar looks exactly as before. `uninstall-hooks` puts back
+  precisely the command you had.
+- With **no** status line, `install-hooks` claims the slot with a tiny one
+  (`5h 15% · 7d 9% · $24.73`) purely to capture the figures.
 - Turn the whole thing off with `claude-pet set usage false`; change the
   warning point with `claude-pet set usage_warn_percent 80`.
 

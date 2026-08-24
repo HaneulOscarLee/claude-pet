@@ -570,33 +570,70 @@ def _statusline_is_ours(value: Any) -> bool:
 
 
 def _install_statusline(path: Path) -> str:
-    """Claim the statusLine slot for usage capture, but only if it is free.
+    """Get the usage figures flowing, whatever holds the statusLine slot.
 
-    The slot holds one command and whoever owns it controls the status bar, so
-    an existing one -- oh-my-claudecode, or the user's own -- is never
-    displaced: its figures are read from its cache instead. This runs only for
-    someone who has no status line at all, for whom ours is a small addition
-    rather than a takeover, and `uninstall-hooks` removes only what it wrote.
+    The slot holds one command, and the figures only come through it -- so an
+    empty slot gets our capture outright, and a slot the user already filled
+    gets *wrapped*: our command captures the JSON and then runs theirs with the
+    same stdin, printing its output. Their bar looks exactly as before; the
+    figures just stop vanishing. "Usage read from its cache instead" used to be
+    the story for every existing status line, and it was only ever true of
+    oh-my-claudecode -- anyone else's left `usage.read()` empty for good.
 
-    Returns "installed", "already", "kept" (someone else owns it), or "".
+    oh-my-claudecode stays unwrapped: its cache already carries the very JSON
+    we want, so wrapping it would add a python start-up per render for nothing.
+
+    Returns "installed", "wrapped", "already", "kept" (OMC), or "".
     """
+    import shlex
+
     settings = _read_settings(path)
     existing = settings.get("statusLine")
     if _statusline_is_ours(existing):
         return "already"
-    if existing:
+    original = (existing or {}).get("command") if isinstance(existing, dict) else None
+    if existing and not isinstance(original, str):
+        # A statusLine we do not understand (no command string): leave it be.
         return "kept"
-    settings["statusLine"] = {"type": "command", "command": _statusline_command()}
+    if original and "omc-hud" in original:
+        return "kept"
+    if original:
+        command = f"{_statusline_command()} --wrap {shlex.quote(original)}"
+        outcome = "wrapped"
+    else:
+        command = _statusline_command()
+        outcome = "installed"
+    settings["statusLine"] = {"type": "command", "command": command}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    return "installed"
+    return outcome
+
+
+def _statusline_wrapped_original(command: str) -> str | None:
+    """The command our wrap is carrying, or None when it is not a wrap."""
+    import shlex
+
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    if "--wrap" not in parts:
+        return None
+    index = parts.index("--wrap")
+    return parts[index + 1] if index + 1 < len(parts) else None
 
 
 def _uninstall_statusline(path: Path) -> bool:
     settings = _read_settings(path)
-    if not _statusline_is_ours(settings.get("statusLine")):
+    value = settings.get("statusLine")
+    if not _statusline_is_ours(value):
         return False
-    settings.pop("statusLine", None)
+    # A wrap goes back to what it was wrapping; a plain install just goes.
+    original = _statusline_wrapped_original(value.get("command") or "")
+    if original:
+        settings["statusLine"] = {"type": "command", "command": original}
+    else:
+        settings.pop("statusLine", None)
     path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     return True
 
@@ -743,8 +780,10 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
             outcome = _install_statusline(path)
             if not quiet and outcome == "installed":
                 print(f'  {"":<12} usage line installed (statusLine)')
+            elif not quiet and outcome == "wrapped":
+                print(f'  {"":<12} wrapped your statusLine to capture usage; its output is unchanged')
             elif not quiet and outcome == "kept":
-                print(f'  {"":<12} statusLine already set; usage read from it instead')
+                print(f'  {"":<12} oh-my-claudecode statusLine kept; usage read from its cache')
     return status
 
 
@@ -1521,6 +1560,11 @@ def build_parser() -> argparse.ArgumentParser:
         "statusline",
         help="(internal) capture Claude Code's usage figures from a statusLine render",
     )
+    statusline.add_argument(
+        "--wrap",
+        metavar="COMMAND",
+        help="after capturing, run this command with the same stdin and print its output",
+    )
     statusline.set_defaults(func=cmd_statusline)
 
     hook = subparsers.add_parser("hook", help="(internal) handle a hook event")
@@ -1611,13 +1655,19 @@ def cmd_hook(args: argparse.Namespace) -> int:
     return hook.main([args.event] if args.event else [])
 
 
-def cmd_statusline(_args: argparse.Namespace) -> int:
+def cmd_statusline(args: argparse.Namespace) -> int:
     """Claude Code hands this its render JSON on stdin, every frame.
 
     We are only here for the usage figures it carries -- the one channel they
     come through -- so we stash them and print a short line back. Always exits
     0 and never lets an error escape: the status bar is waiting on our stdout,
     and a traceback there is worse than a blank line.
+
+    With `--wrap <command>` the line is somebody else's: the same stdin is
+    handed to the command the user had before we arrived, and its output is
+    printed instead of ours. Their bar stays exactly theirs; we only read the
+    JSON on its way past. If their command fails or dawdles, our own line
+    stands in rather than leaving the bar blank.
     """
     from . import usage
 
@@ -1626,6 +1676,23 @@ def cmd_statusline(_args: argparse.Namespace) -> int:
     except (OSError, ValueError):
         raw = ""
     figures = usage.capture(raw)
+
+    wrapped = getattr(args, "wrap", None)
+    if wrapped:
+        import subprocess
+
+        try:
+            done = subprocess.run(  # noqa: S602 -- the user's own command, verbatim
+                wrapped, shell=True, input=raw, capture_output=True,
+                text=True, timeout=10,
+            )
+            if done.returncode == 0 and done.stdout:
+                sys.stdout.write(done.stdout)
+                return 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+        # Their command failed; fall through to our own line rather than
+        # leaving the status bar empty.
     # The line Claude Code prints in the status bar. Kept plain and short --
     # whoever installed our statusline had none before, so this is a small
     # bonus rather than something replacing their own.

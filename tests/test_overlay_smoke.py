@@ -307,6 +307,14 @@ def checks() -> list[tuple[str, bool]]:
     # and stays quiet otherwise. It flashes, so we watch flash_until move.
     from claude_pet import shellext as _sx
     saved = (_sx.supported_here, _sx.installed, _sx.active, _sx.ensure)
+    # The reminder also makes sure the usage capture is wired, which writes the
+    # user's real settings.json when a statusline needs wrapping -- stubbed, and
+    # recorded, for the same reason ensure() is: a test must not reconfigure
+    # whoever runs it.
+    from claude_pet import cli as _cli
+    real_install_sl = _cli._install_statusline
+    wired = []
+    _cli._install_statusline = lambda path: (wired.append(str(path)), "kept")[1]
     try:
         # ensure() is stubbed as well: the reminder now lays the bridge down if
         # it is missing, and a test has no business installing a GNOME
@@ -321,6 +329,8 @@ def checks() -> list[tuple[str, bool]]:
         results.append(("installed-but-inactive bridge prompts a re-login",
                         window.flash_until > _t2.monotonic()))
         results.append(("...having made sure the bridge is on disk", bool(laid)))
+        results.append(("...and the usage capture wired, without touching this home",
+                        bool(wired)))
         _sx.active = lambda: True            # already loaded -> silent
         window.flash_until = 0.0
         window._remind_bridge_relogin()
@@ -334,6 +344,7 @@ def checks() -> list[tuple[str, bool]]:
         results.append(("...and nothing is installed there either", not laid))
     finally:
         _sx.supported_here, _sx.installed, _sx.active, _sx.ensure = saved
+        _cli._install_statusline = real_install_sl
 
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",

@@ -131,10 +131,75 @@ def read_checks():
     return results
 
 
+def wrap_checks():
+    """Wrapping a status line the user already has, so its figures stop vanishing.
+
+    "Usage read from it instead" used to be said of every existing status line
+    and was only ever true of oh-my-claudecode; anyone else's left `read()`
+    empty for good. Now theirs is wrapped -- captured on the way past, output
+    untouched -- and unwrapping puts back exactly what they had.
+    """
+    import json
+    import tempfile
+    from pathlib import Path as P
+
+    from claude_pet import cli
+
+    results = []
+    with tempfile.TemporaryDirectory() as home:
+        path = P(home) / "settings.json"
+
+        # An empty slot: ours, plain.
+        path.write_text("{}")
+        results.append(("an empty slot gets our capture",
+                        cli._install_statusline(path) == "installed"))
+        results.append(("...and is recognised as ours afterwards",
+                        cli._install_statusline(path) == "already"))
+        results.append(("uninstalling an empty-slot install removes it",
+                        cli._uninstall_statusline(path)
+                        and "statusLine" not in json.loads(path.read_text())))
+
+        # A third-party line, awkward quoting included: wrapped, not skipped.
+        theirs = "/usr/local/bin/fancy --flag 'has spaces' \"and quotes\""
+        path.write_text(json.dumps({"statusLine": {"type": "command", "command": theirs}}))
+        results.append(("a third-party line is wrapped",
+                        cli._install_statusline(path) == "wrapped"))
+        wrapped = json.loads(path.read_text())["statusLine"]["command"]
+        results.append(("...ours on the outside", "statusline --wrap" in wrapped))
+        results.append(("...theirs carried intact",
+                        cli._statusline_wrapped_original(wrapped) == theirs))
+        results.append(("...and wrapping is idempotent",
+                        cli._install_statusline(path) == "already"))
+        results.append(("unwrapping puts back exactly what they had",
+                        cli._uninstall_statusline(path)
+                        and json.loads(path.read_text())["statusLine"]["command"] == theirs))
+
+        # oh-my-claudecode: its cache already carries the JSON, so it is left
+        # alone rather than paying a python start-up per render for nothing.
+        omc = "sh ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-cache.sh"
+        path.write_text(json.dumps({"statusLine": {"type": "command", "command": omc}}))
+        results.append(("oh-my-claudecode is kept, not wrapped",
+                        cli._install_statusline(path) == "kept"))
+        results.append(("...and untouched",
+                        json.loads(path.read_text())["statusLine"]["command"] == omc))
+
+        # A statusLine with no command string is not understood: hands off.
+        path.write_text(json.dumps({"statusLine": {"type": "something-else"}}))
+        results.append(("an unrecognised statusLine is left alone",
+                        cli._install_statusline(path) == "kept"))
+
+    # The parser side: a plain install carries no original.
+    results.append(("a plain install is not mistaken for a wrap",
+                    cli._statusline_wrapped_original("x statusline") is None))
+    results.append(("garbage quoting is not a wrap",
+                    cli._statusline_wrapped_original("x --wrap 'unclosed") is None))
+    return results
+
+
 def main():
     failures = total = 0
     for label, results in (("extract", extract_checks()), ("capture", capture_checks()),
-                           ("read", read_checks())):
+                           ("read", read_checks()), ("wrap", wrap_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1

@@ -2454,6 +2454,17 @@ class Overlay(Gtk.Window):
         terminal, and this is the only channel it has.
         """
         try:
+            # The usage capture rides along for the same reason: someone
+            # updating from an older version runs that version's updater, and
+            # the pet restarting onto the new code is the one moment that
+            # reaches everybody. Idempotent, and a no-op for oh-my-claudecode
+            # users, whose cache we read as-is.
+            from . import cli, config as config_module
+
+            cli._install_statusline(config_module.claude_home() / "settings.json")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             from . import shellext
 
             if not shellext.supported_here():
