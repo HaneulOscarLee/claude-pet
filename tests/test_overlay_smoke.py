@@ -306,8 +306,13 @@ def checks() -> list[tuple[str, bool]]:
     # yet active (the "menu update / fresh install, log in to finish" state),
     # and stays quiet otherwise. It flashes, so we watch flash_until move.
     from claude_pet import shellext as _sx
-    saved = (_sx.supported_here, _sx.installed, _sx.active)
+    saved = (_sx.supported_here, _sx.installed, _sx.active, _sx.ensure)
     try:
+        # ensure() is stubbed as well: the reminder now lays the bridge down if
+        # it is missing, and a test has no business installing a GNOME
+        # extension into the home of whoever is running it.
+        laid = []
+        _sx.ensure = lambda: (laid.append(1), "already")[1]
         _sx.supported_here = lambda: True
         _sx.installed = lambda: True
         _sx.active = lambda: False           # installed but not loaded yet
@@ -315,17 +320,20 @@ def checks() -> list[tuple[str, bool]]:
         window._remind_bridge_relogin()
         results.append(("installed-but-inactive bridge prompts a re-login",
                         window.flash_until > _t2.monotonic()))
+        results.append(("...having made sure the bridge is on disk", bool(laid)))
         _sx.active = lambda: True            # already loaded -> silent
         window.flash_until = 0.0
         window._remind_bridge_relogin()
         results.append(("an active bridge says nothing", window.flash_until == 0.0))
         _sx.supported_here = lambda: False   # not GNOME/Wayland -> silent
         _sx.active = lambda: False
+        laid.clear()                         # only this call should count
         window._remind_bridge_relogin()
         results.append(("off a supported desktop it says nothing",
                         window.flash_until == 0.0))
+        results.append(("...and nothing is installed there either", not laid))
     finally:
-        _sx.supported_here, _sx.installed, _sx.active = saved
+        _sx.supported_here, _sx.installed, _sx.active, _sx.ensure = saved
 
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",

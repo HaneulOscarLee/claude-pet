@@ -316,6 +316,10 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     if _hook_events_installed() < len(HOOK_EVENTS):
         cmd_install_hooks(argparse.Namespace(project=False))
+    else:
+        # Hooks already in, so install-hooks was skipped -- but the bridge may
+        # still be missing from an install that predates it.
+        _ensure_pointer_bridge()
     if not completion_installed():
         _install_completion()
     if not launcher_on_path():
@@ -539,6 +543,21 @@ def _hook_events_installed() -> int:
     )
 
 
+def _ensure_pointer_bridge(quiet: bool = False) -> None:
+    """Lay down the Wayland pointer bridge, wherever setup happens.
+
+    It used to be done only by `setup`, which the `.deb` never runs: that
+    package's autostart entry calls `install-hooks` and its app icon calls
+    `start`. So every packaged install had hooks and no bridge, and calling the
+    pet from over a browser or a file manager could not work -- which is why so
+    many people had it fail at once.
+    """
+    from . import shellext
+
+    if shellext.ensure() == "installed" and not quiet:
+        print(f'  {"":<12} pointer bridge installed — log out and back in to finish it')
+
+
 def _statusline_command() -> str:
     return f"{launcher_path()} statusline"
 
@@ -720,6 +739,7 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
         # statusLine, so claim it for that -- but only if nothing else holds
         # it. Claude only; the others emit no such figures.
         if agent_id == "claude":
+            _ensure_pointer_bridge(quiet)
             outcome = _install_statusline(path)
             if not quiet and outcome == "installed":
                 print(f'  {"":<12} usage line installed (statusLine)')

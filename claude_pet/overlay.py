@@ -2438,19 +2438,30 @@ class Overlay(Gtk.Window):
         return False
 
     def _remind_bridge_relogin(self) -> bool:
-        """Once, when the bridge is installed but a re-login has not loaded it.
+        """Lay the pointer bridge down if it is missing, and say if a login is due.
 
-        Installing the extension does not activate it -- GNOME loads them only
-        at login -- so setup, a manual install, and a menu-driven update all
-        leave it dormant until then. The terminal paths print that; a menu
-        update has no terminal, so the pet is the one place left to say it.
+        Done here because here is the one place that catches everybody. Whatever
+        `update` learns to do, the person updating *from* an older version runs
+        that older version's updater -- so nothing added to the update path
+        reaches anyone who has not already got it. The pet, though, restarts
+        onto the new code after every update, so this runs for all of them: the
+        `.deb` whose autostart only ever called `install-hooks`, the tarball,
+        the clone.
+
+        Installing cannot activate it -- GNOME loads extensions only at login --
+        so whenever the copy on disk is not answering, the pet says so. The
+        terminal paths print the same thing; a menu-driven update has no
+        terminal, and this is the only channel it has.
         """
         try:
             from . import shellext
 
-            if shellext.supported_here() and shellext.installed() and not shellext.active():
+            if not shellext.supported_here():
+                return False
+            shellext.ensure()
+            if shellext.installed() and not shellext.active():
                 self._flash(self.labels["toast.bridge_relogin"], seconds=8.0)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 -- never let this trouble the overlay
             pass
         return False
 

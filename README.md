@@ -439,8 +439,9 @@ callable from anywhere. It watches nothing, owns no bus name of its own, and
 comes off again with `--undo`. The log out is not optional: GNOME reads its
 extensions once, at startup.
 
-`setup` and every update lay this down for you on GNOME/Wayland, so
-`fix-pointer` by hand is rarely needed — but the log out still is, and the pet
+The pet lays this down itself, on GNOME/Wayland, whenever it starts and finds
+it missing — so `setup`, the `.deb`'s autostart, the app icon and any update
+all arrive at the same place and `fix-pointer` by hand is rarely needed — but the log out still is, and the pet
 says so once on its next start when the bridge is installed but not yet
 loaded.
 
