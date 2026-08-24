@@ -210,11 +210,19 @@ def install_checks() -> list[tuple[str, bool]]:
                     _os2.environ[k] = v
 
         # ensure(): idempotent lay-down used by setup and update.
+        #
+        # Starts from nothing on purpose. The block above leaves a copy behind,
+        # and "installs when missing" then depended on whether this machine's
+        # shell version happened to disagree with it -- which passed locally
+        # (GNOME 46 vs a legacy copy: replaced) and failed on CI, where there
+        # is no gnome-shell to ask and a copy is left alone.
+        shellext.uninstall()
         import os as _os
         was = _os.environ.get("XDG_CURRENT_DESKTOP"), _os.environ.get("XDG_SESSION_TYPE")
         _os.environ["XDG_CURRENT_DESKTOP"] = "ubuntu:GNOME"
         _os.environ["XDG_SESSION_TYPE"] = "wayland"
         try:
+            results.append(("nothing is installed going in", not shellext.installed()))
             results.append(("ensure installs when missing", shellext.ensure() == "installed"))
             results.append(("...and is idempotent the second time",
                             shellext.ensure() == "already"))
