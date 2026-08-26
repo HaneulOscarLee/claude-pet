@@ -166,10 +166,24 @@ def installed_matches_shell() -> bool:
     except OSError:
         return False
     version = shell_version()
-    if version is None:
-        return True  # nothing to compare against; leave it alone
-    is_esm = "export default class" in code
-    return is_esm == (version >= ESM_SINCE)
+    if version is not None:
+        is_esm = "export default class" in code
+        if is_esm != (version >= ESM_SINCE):
+            return False  # wrong format for this shell
+
+    # Same format, but is it the same code we ship now? A release that adds a
+    # method to the extension must actually replace the copy on disk -- and it
+    # only reaches an existing user through this check, since their old updater
+    # ran before it existed. Compared by content so any change propagates.
+    source = source_path()
+    if source is not None:
+        try:
+            shipped = (source / "extension.js").read_text(encoding="utf-8")
+        except OSError:
+            return True
+        if shipped != code:
+            return False
+    return True
 
 
 def ensure() -> str:

@@ -97,6 +97,11 @@ def variant_checks() -> list[tuple[str, bool]]:
     results.append(("both answer with the compositor's pointer",
                     "global.get_pointer()" in legacy_code
                     and "global.get_pointer()" in modern_code))
+    results.append(("both can raise a window for the compositor",
+                    "RaiseWindowForPids" in legacy_code
+                    and "RaiseWindowForPids" in modern_code))
+    results.append(("...using activate, which a client cannot do to another app",
+                    ".activate(" in legacy_code and ".activate(" in modern_code))
 
     # Version steering, with the shell's answer stubbed both ways.
     real = shellext.shell_version
@@ -238,6 +243,42 @@ def install_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def content_checks() -> list[tuple[str, bool]]:
+    """A release that changes the extension must actually replace the old copy.
+
+    `ensure()` reported "already" on any present copy of the right format, so a
+    new method added to the extension never reached an existing install --
+    their updater ran before the new code and the pet's startup only re-copied
+    if the format differed. Now the content is compared too.
+    """
+    results = []
+    with TempHome(), FakeSettings([]):
+        import os as _os
+        was = _os.environ.get("XDG_CURRENT_DESKTOP"), _os.environ.get("XDG_SESSION_TYPE")
+        real_ver = shellext.shell_version
+        _os.environ["XDG_CURRENT_DESKTOP"] = "ubuntu:GNOME"
+        _os.environ["XDG_SESSION_TYPE"] = "wayland"
+        try:
+            shellext.shell_version = lambda: 46
+            shellext.ensure()
+            results.append(("a fresh copy matches the shipped source",
+                            shellext.installed_matches_shell()))
+            # Tamper with the installed copy: it must now read as not matching,
+            # and ensure() must put the shipped one back.
+            (shellext.install_path() / "extension.js").write_text("// stale copy")
+            results.append(("an out-of-date copy is detected",
+                            not shellext.installed_matches_shell()))
+            results.append(("...and ensure replaces it", shellext.ensure() == "installed"))
+            results.append(("...restoring the shipped code",
+                            shellext.installed_matches_shell()))
+        finally:
+            shellext.shell_version = real_ver
+            for k, v in zip(("XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE"), was):
+                if v is None: _os.environ.pop(k, None)
+                else: _os.environ[k] = v
+    return results
+
+
 def where_checks() -> list[tuple[str, bool]]:
     """It is only worth installing on GNOME, on Wayland."""
     results = []
@@ -267,6 +308,7 @@ def main() -> int:
     total = 0
     for label, results in (("variants", variant_checks()),
                             ("shipped", shipped_checks()), ("install", install_checks()),
+                            ("content", content_checks()),
                             ("where", where_checks())):
         print(f"{label}:")
         for name, ok in results:

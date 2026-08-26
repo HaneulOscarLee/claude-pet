@@ -1,11 +1,4 @@
-// The same one method, in the pre-45 extension format.
-//
-// GNOME 45 moved extensions to ES modules and a class extending Extension;
-// before that they are plain scripts using `imports.*` and exporting an
-// `init()` that returns an object with enable/disable. A 45+ extension does
-// not load at all on GNOME 42 -- Ubuntu 22.04's version -- and the shell says
-// nothing about why, which is exactly how "the pet cannot see my pointer over
-// the browser" looked on that machine.
+// The same two methods, in the pre-45 extension format (GNOME 42, Ubuntu 22.04).
 const { Gio } = imports.gi;
 
 const IFACE = `
@@ -14,6 +7,10 @@ const IFACE = `
     <method name="GetPointer">
       <arg type="i" direction="out" name="x"/>
       <arg type="i" direction="out" name="y"/>
+    </method>
+    <method name="RaiseWindowForPids">
+      <arg type="ai" direction="in" name="pids"/>
+      <arg type="b" direction="out" name="raised"/>
     </method>
   </interface>
 </node>`;
@@ -35,6 +32,23 @@ class ClaudePetPointer {
     GetPointer() {
         const [x, y] = global.get_pointer();
         return [x, y];
+    }
+
+    RaiseWindowForPids(pids) {
+        const wanted = {};
+        for (const p of pids) wanted[p] = true;
+        let best = null;
+        for (const actor of global.get_window_actors()) {
+            const w = actor.meta_window;
+            if (!w || !wanted[w.get_pid()]) continue;
+            if (best === null || w.get_user_time() > best.get_user_time())
+                best = w;
+        }
+        if (best === null) return false;
+        const ws = best.get_workspace();
+        if (ws) ws.activate_with_focus(best, global.get_current_time());
+        best.activate(global.get_current_time());
+        return true;
     }
 }
 

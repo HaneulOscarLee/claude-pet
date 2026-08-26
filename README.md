@@ -512,7 +512,8 @@ When the pet shows **needs you**, **done** or **failed**, the bubble adds
 | running inside **tmux** | raises the terminal *and* switches to the exact pane |
 | **X11/XWayland** terminal, with `wmctrl` or `xdotool` | raises the terminal window |
 | **Wayland-native** terminal implementing `org.freedesktop.Application` | asks it to present itself |
-| any other **Wayland-native** terminal | not possible — the pet says so rather than pretending |
+| any other **Wayland-native** terminal, on GNOME with the pointer bridge | raised by the shell extension — the compositor can, where an external client cannot |
+| a Wayland-native terminal with no bridge | not possible — the pet says so rather than pretending |
 
 The last row is a mutter rule, not an oversight: a client may not raise
 *another* application's window, and xdg-activation needs a token only the

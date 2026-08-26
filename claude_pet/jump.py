@@ -230,6 +230,42 @@ def _terminal_window_title(locator: dict[str, Any]) -> str | None:
     return title if isinstance(title, str) and title else None
 
 
+def _shell_raise(locator: dict[str, Any]) -> "JumpResult | None":
+    """Ask our GNOME Shell extension to raise the window, if it is there.
+
+    The compositor may raise any window; an external client may not raise
+    another application's. So this is the one route that works for a
+    native Wayland terminal without wrapping it under XWayland -- which is
+    what `fix-terminal` did, and what froze the terminal when an X11 window
+    came and went. Tried first on that account: if it works, nothing external
+    has to touch window stacking at all.
+    """
+    pids = [pid for pid in locator.get("pids") or [] if isinstance(pid, int)]
+    pids += _tmux_client_pids(locator)
+    if not pids:
+        return None
+    try:
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        reply = bus.call_sync(
+            "org.gnome.Shell",
+            "/org/gnome/Shell/Extensions/ClaudePetPointer",
+            "org.gnome.Shell.Extensions.ClaudePetPointer",
+            "RaiseWindowForPids",
+            GLib.Variant("(ai)", (pids,)),
+            None, Gio.DBusCallFlags.NONE, int(TIMEOUT_SECONDS * 1000), None,
+        )
+        raised = bool(reply.unpack()[0])
+    except Exception:  # noqa: BLE001 -- extension absent, old, or not GNOME
+        return None
+    if raised:
+        return JumpResult(True, "raised the terminal")
+    # The extension answered but found no window for these pids -- let the
+    # other routes try rather than reporting a definite failure.
+    return None
+
+
 def _x11_window_for(pids: list[int], title: str | None = None) -> str | None:
     """Window id owned by one of `pids`, using whatever tool is installed.
 
@@ -379,7 +415,7 @@ def to_session(locator: dict[str, Any] | None) -> JumpResult:
     # window that is still behind everything else -- and say it had taken you
     # there. The window goes first so the pane switch happens in view.
     raised = None
-    for attempt in (_x11_jump, _dbus_jump):
+    for attempt in (_shell_raise, _x11_jump, _dbus_jump):
         raised = attempt(locator)
         if raised is not None:
             break

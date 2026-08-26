@@ -295,11 +295,76 @@ def tmux_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def shell_raise_checks() -> list[tuple[str, bool]]:
+    """The route that raises a native Wayland terminal via the shell extension.
+
+    An external client cannot raise another application's window on Wayland,
+    which is why `fix-terminal` used to wrap the terminal under XWayland -- the
+    wrapping that froze it. The compositor can raise anyone, so the extension
+    does it, and no terminal needs wrapping. Here the D-Bus call is stubbed;
+    what is checked is that the route is tried and its answer respected.
+    """
+    import types
+
+    results = []
+    calls = []
+
+    def fake_bus(answer):
+        # A stand-in for the Gio bus whose call_sync returns `answer`, or raises.
+        def call_sync(*args, **kwargs):
+            calls.append(args)
+            if answer is None:
+                raise RuntimeError("extension not there")
+            return types.SimpleNamespace(unpack=lambda: (answer,))
+        return types.SimpleNamespace(call_sync=call_sync)
+
+    real = jump._shell_raise
+
+    def run_with(answer, locator):
+        import claude_pet.jump as J
+        gi = types.ModuleType("gi"); rep = types.ModuleType("gi.repository")
+        class _Var:
+            def __init__(self, *a, **k): pass
+        Gio = types.SimpleNamespace(
+            BusType=types.SimpleNamespace(SESSION=0),
+            DBusCallFlags=types.SimpleNamespace(NONE=0),
+            bus_get_sync=lambda *_a: fake_bus(answer),
+        )
+        GLib = types.SimpleNamespace(Variant=lambda *a: None)
+        rep.Gio = Gio; rep.GLib = GLib
+        import sys
+        saved = sys.modules.get("gi"), sys.modules.get("gi.repository")
+        sys.modules["gi"] = gi; sys.modules["gi.repository"] = rep
+        try:
+            return J._shell_raise(locator)
+        finally:
+            for k, v in (("gi", saved[0]), ("gi.repository", saved[1])):
+                if v is None: sys.modules.pop(k, None)
+                else: sys.modules[k] = v
+
+    loc = {"pids": [4242]}
+    calls.clear()
+    r = run_with(True, loc)
+    results.append(("a raised window is a successful jump", r is not None and r.ok))
+    results.append(("...and the extension was actually called", len(calls) == 1))
+
+    r = run_with(False, loc)
+    results.append(("no matching window lets other routes try (None)", r is None))
+
+    r = run_with(None, loc)
+    results.append(("no extension there lets other routes try (None)", r is None))
+
+    results.append(("with no pids at all it declines",
+                    run_with(True, {"pids": []}) is None))
+
+    return results
+
+
 def main() -> int:
     failures = 0
     total = 0
     for label, results in (("windows", window_checks()), ("locator", locator_checks()),
-                            ("end to end", end_to_end_checks()), ("tmux", tmux_checks())):
+                            ("end to end", end_to_end_checks()), ("tmux", tmux_checks()), ("shell-raise", shell_raise_checks())):
         print(f"{label}:")
         for name, ok in results:
             total += 1
