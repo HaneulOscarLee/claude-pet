@@ -1098,6 +1098,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "claude-pet fix-terminal",
             "" if terminal.wrapper_installed() else "a Wayland terminal cannot be raised as-is",
         )
+    if terminal.wrapper_installed():
+        # Worth knowing when a terminal misbehaves: this makes it an XWayland
+        # client, and GTK apps under XWayland have their own class of stalls.
+        # `claude-pet fix-terminal --undo` runs it natively again (tmux jumps
+        # still work; raising a native window does not).
+        print("  INFO  terminal runs under XWayland (fix-terminal); undo with "
+              "`claude-pet fix-terminal --undo` if it misbehaves")
+
+    # The hook runs inside every Claude turn and a slow one is a frozen
+    # terminal, so any it logged as slow are reported here rather than left
+    # in a file nobody knows about.
+    slow_log = state.state_dir() / "hook-slow.log"
+    try:
+        slow_lines = slow_log.read_text(encoding="utf-8").splitlines() if slow_log.is_file() else []
+    except OSError:
+        slow_lines = []
+    if slow_lines:
+        recent = slow_lines[-1]
+        optional("hook never slow", False,
+                 f"{len(slow_lines)} slow hook call(s) logged; last: {recent}  "
+                 f"({slow_log})")
+    else:
+        optional("hook never slow", True, "no hook call over 0.5s has been logged")
 
     print()
     if problems:

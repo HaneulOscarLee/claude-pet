@@ -1371,6 +1371,13 @@ class Overlay(Gtk.Window):
             config.update(position=self.settings["position"])
             return
 
+        if distance < 1e-6:
+            # Already exactly on the target but the pointer has not settled,
+            # so the arrival branch above did not fire. Nothing to walk; wait
+            # for the pointer to move or settle. Dividing by this distance
+            # took the overlay down (ZeroDivisionError in the log).
+            return
+
         # Straight at you, not along one axis: the pointer is somewhere on a
         # screen, not somewhere on a line, and a pet that only ever slides
         # sideways is answering half the summons.

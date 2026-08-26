@@ -27,12 +27,31 @@ def launcher_path() -> Path:
 
 
 def overlay_pid() -> int | None:
-    """PID of the running overlay, or None if the pidfile is stale or absent."""
+    """PID of the running overlay, or None if the pidfile is stale or absent.
+
+    Checks that the pid is *ours*, not merely alive. A pidfile left behind by
+    a crash names a number the kernel hands out again -- to a terminal, to
+    Claude itself, to anything -- and `stop` and the updater both SIGTERM
+    whatever this returns. Existence alone was one recycled pid away from
+    killing the wrong program.
+    """
     try:
         pid = int(state.pid_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
-    return pid if Path(f"/proc/{pid}").exists() else None
+    cmdline = _cmdline_of(pid)
+    if cmdline is None:
+        return None
+    return pid if "claude_pet" in cmdline or "claude-pet" in cmdline else None
+
+
+def _cmdline_of(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(
+            "utf-8", "replace"
+        )
+    except OSError:
+        return None
 
 
 def spawn_detached(reason: str = "") -> int | None:

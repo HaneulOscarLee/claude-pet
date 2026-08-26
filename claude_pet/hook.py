@@ -102,14 +102,62 @@ def _tool_failed(payload: dict[str, Any]) -> bool:
     return False
 
 
+#: A hook taking longer than this is logged, with what it was doing. Claude
+#: Code waits on every hook synchronously, so a slow one is a frozen terminal
+#: -- and a report of "the terminal freezes sometimes" is unanswerable without
+#: knowing whether the hook was the thing that took the time.
+SLOW_SECONDS = 0.5
+
+
 def main(argv: list[str] | None = None) -> int:
+    import time
+
+    started = time.monotonic()
+    phases: list[str] = []
+    try:
+        return _main(argv, phases)
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= SLOW_SECONDS:
+            _log_slow(elapsed, phases)
+
+
+def _log_slow(elapsed: float, phases: list[str]) -> None:
+    """Append one line about a slow hook to the state dir. Never raises."""
+    try:
+        import datetime
+
+        path = state.state_dir() / "hook-slow.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"{stamp}  {elapsed:.2f}s  {' > '.join(phases) or '-'}\n")
+        # Bounded: the last 200 lines are plenty to see a pattern.
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > 200:
+            path.write_text("\n".join(lines[-200:]) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _main(argv: list[str] | None, phases: list[str]) -> int:
+    import time
+
     argv = sys.argv[1:] if argv is None else argv
     forced_event = argv[0] if argv else None
+    _t = time.monotonic()
+
+    def mark(name: str) -> None:
+        nonlocal _t
+        now = time.monotonic()
+        phases.append(f"{name}={now - _t:.2f}s")
+        _t = now
 
     try:
         raw = sys.stdin.read()
     except (OSError, ValueError):
         raw = ""
+    mark("stdin")
     try:
         payload = json.loads(raw) if raw.strip() else {}
     except ValueError:
@@ -135,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     fields: dict[str, Any] = {
         "detail": _detail(event, payload) if pet_state else None,
         "cwd": str(payload.get("cwd") or "") or None,
-        "locator": locate.locator() if event in LOCATE_ON else None,
+        "locator": (locate.locator() if event in LOCATE_ON else None),
         # Which event put the session where it is. Costs a word in the state
         # file and turns "why does it say working?" into one `status` call.
         "event": event,
@@ -153,10 +201,12 @@ def main(argv: list[str] | None = None) -> int:
     if pet_state != KEEP:
         fields["state"] = pet_state
 
+    mark("locate")
     try:
         state.update(session_id, **fields)
     except OSError:
         return 0
+    mark("state")
 
     # `UserPromptSubmit` as well as `SessionStart`, because a session outlives
     # the pet: quit it overnight, or lose it to a crash, and resuming the
@@ -164,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     # brand new one would. Costs a pidfile read when the pet is already up.
     if event in AUTOSTART_ON and config.load().get("autostart", True):
         launch.spawn_detached(reason=event)
+        mark("spawn")
     return 0
 
 

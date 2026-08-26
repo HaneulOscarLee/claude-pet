@@ -124,6 +124,50 @@ def checks(workspace: Path) -> list[tuple[str, bool]]:
     return results
 
 
+def pidfile_checks() -> list[tuple[str, bool]]:
+    """The pidfile names a number, and numbers get recycled.
+
+    `stop` and the updater SIGTERM whatever `overlay_pid()` returns. It used to
+    return any pid that was merely alive, so a pidfile left by a crash could
+    point at a terminal, or at Claude, and get it killed. It must be *ours*.
+    """
+    import os
+    import sys
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from claude_pet import launch
+
+    results = []
+    real_cmdline = launch._cmdline_of
+    with tempfile.TemporaryDirectory() as home:
+        was = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = home
+        try:
+            from claude_pet import state
+            state.pid_path().parent.mkdir(parents=True, exist_ok=True)
+            state.pid_path().write_text("4242")
+
+            launch._cmdline_of = lambda pid: "python3 -m claude_pet run"
+            results.append(("a pid running our overlay is returned", launch.overlay_pid() == 4242))
+            launch._cmdline_of = lambda pid: "/usr/bin/terminator"
+            results.append(("a recycled pid now owned by a terminal is not",
+                            launch.overlay_pid() is None))
+            launch._cmdline_of = lambda pid: "claude --resume"
+            results.append(("...nor one owned by Claude itself", launch.overlay_pid() is None))
+            launch._cmdline_of = lambda pid: None
+            results.append(("a dead pid is not", launch.overlay_pid() is None))
+            state.pid_path().write_text("not a number")
+            results.append(("a garbage pidfile is not", launch.overlay_pid() is None))
+        finally:
+            launch._cmdline_of = real_cmdline
+            if was is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = was
+    return results
+
+
 def main() -> int:
     if not shutil.which("bash"):
         print("bash not available; skipping")
@@ -131,13 +175,17 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as workspace:
         results = checks(Path(workspace))
+    pid_results = pidfile_checks()
 
     failures = 0
-    print("interpreter choice:")
-    for name, ok in results:
-        failures += not ok
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-    print(f"\n{len(results) - failures}/{len(results)} passed")
+    total = 0
+    for label, group in (("interpreter choice", results), ("pidfile", pid_results)):
+        print(f"{label}:")
+        for name, ok in group:
+            total += 1
+            failures += not ok
+            print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+    print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 
 

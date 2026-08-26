@@ -346,6 +346,21 @@ def checks() -> list[tuple[str, bool]]:
         _sx.supported_here, _sx.installed, _sx.active, _sx.ensure = saved
         _cli._install_statusline = real_install_sl
 
+    # A summons whose target is exactly where the sprite already stands, while
+    # the pointer is still moving: distance 0, arrival branch not taken. This
+    # divided by zero and took the overlay down (traceback in overlay.log).
+    window.throw = None
+    window.walk_target = (window.sprite_x, window.sprite_y)
+    window.pointer_settled = False
+    window.errand_at = None
+    try:
+        window._advance_errand(0.05)
+        ok = True
+    except ZeroDivisionError:
+        ok = False
+    results.append(("an errand already at its target does not divide by zero", ok))
+    window.walk_target = None
+
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]
