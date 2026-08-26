@@ -529,12 +529,20 @@ on request, so where that is available the right window is picked exactly. For
 terminals that offer nothing of the kind it is still the first window, and
 tmux is still the way to land on an exact pane.
 
-`setup` handles this when it applies, by making your terminal run under
-XWayland so `wmctrl` can reach it:
+If you want a click to raise a native Wayland terminal anyway, you can opt
+in to running it under XWayland so `wmctrl` can reach it:
 
 ```bash
 claude-pet fix-terminal [--undo]
 ```
+
+**This is opt-in, and `setup` no longer applies it for you.** An XWayland
+terminal can freeze intermittently: an X11 window appearing (rviz, for
+instance) tripped mutter's window stacking here and the terminal stopped
+rendering until a new window was opened. Nothing else claude-pet does was
+involved — the hook, the state lock and the pet's own X traffic were all
+measured clean. If you run your agent inside tmux you lose nothing without
+it, since a tmux jump lands on the exact pane regardless.
 
 It writes two things, both under your home directory and both removed by
 `--undo`: `~/.local/bin/x-terminal-emulator`, a wrapper that execs the real

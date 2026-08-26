@@ -865,6 +865,8 @@ def cmd_fix_terminal(args: argparse.Namespace) -> int:
         return 0
 
     print("wrapping your terminal so it runs under XWayland...")
+    print("  note: an X11 window appearing (e.g. rviz) has frozen an XWayland terminal")
+    print("  here until a new window was opened. If that happens: claude-pet fix-terminal --undo")
     terminal.install()
     return 0
 
@@ -1091,20 +1093,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     from . import terminal
 
-    if terminal.needed():
-        todo(
-            "terminal reachable for clicks",
-            terminal.wrapper_installed(),
-            "claude-pet fix-terminal",
-            "" if terminal.wrapper_installed() else "a Wayland terminal cannot be raised as-is",
-        )
     if terminal.wrapper_installed():
-        # Worth knowing when a terminal misbehaves: this makes it an XWayland
-        # client, and GTK apps under XWayland have their own class of stalls.
-        # `claude-pet fix-terminal --undo` runs it natively again (tmux jumps
-        # still work; raising a native window does not).
-        print("  INFO  terminal runs under XWayland (fix-terminal); undo with "
-              "`claude-pet fix-terminal --undo` if it misbehaves")
+        # Not a fault, but the first thing to suspect when the terminal freezes:
+        # this runs it under XWayland, and an X11 window appearing (rviz, say)
+        # has tripped mutter's stacking and frozen the terminal until a new
+        # window was opened. Measured here; nothing else the pet does was
+        # involved. tmux jumps work without it.
+        optional("terminal under XWayland (fix-terminal)", False,
+                 "can freeze the terminal when X11 windows come and go; "
+                 "`claude-pet fix-terminal --undo` runs it natively again "
+                 "(tmux jumps still work)")
+    elif terminal.needed():
+        optional("click can raise a native Wayland terminal", False,
+                 "not possible as-is; tmux jumps work. `claude-pet fix-terminal` "
+                 "runs the terminal under XWayland to allow it, at the risk of "
+                 "occasional freezes -- opt in only if you want that")
 
     # The hook runs inside every Claude turn and a slow one is a frozen
     # terminal, so any it logged as slow are reported here rather than left
@@ -1366,12 +1369,17 @@ def _finish_setup(install_deps: bool = True) -> int:
     linked = launcher_on_path()
     completed = completion_installed()
 
-    from . import terminal
-
-    terminal_ready = not terminal.needed() or terminal.wrapper_installed()
+    # fix-terminal is deliberately NOT part of setup any more. It runs the
+    # terminal under XWayland so a click can raise it, and on this very
+    # machine that froze the terminal intermittently -- rviz opening an X11
+    # window tripped mutter's stacking (`meta_window_set_stack_position_no_sync`
+    # assertions) and the XWayland Terminator stopped rendering until a new
+    # window was opened. Nothing else the pet does was involved; measured. A
+    # tmux user loses nothing without it, and anyone else can opt in with
+    # `claude-pet fix-terminal` knowing the trade.
     if (
         has_pack and has_hooks and running and linked and completed
-        and jump_helper_present() and terminal_ready
+        and jump_helper_present()
     ):
         print("Nothing to do: pack installed, hooks in place, on PATH, pet running.")
         return 0
@@ -1387,10 +1395,6 @@ def _finish_setup(install_deps: bool = True) -> int:
     if install_deps and not jump_helper_present():
         print("enabling click-to-jump outside tmux...")
         _install_jump_helper()
-
-    if install_deps and not terminal_ready:
-        print("making your terminal reachable so clicking the pet can raise it...")
-        terminal.install()
 
     if not has_pack:
         print(f"installing pack {DEFAULT_PACK}...")
