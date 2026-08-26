@@ -256,6 +256,34 @@ def cpu_checks() -> list[tuple[str, bool]]:
     return results
 
 
+def stuck_waiting_checks() -> list[tuple[str, bool]]:
+    """A `waiting` that was only the idle nudge heals without another event.
+
+    Existing state files written by the older hook may hold such an entry, and
+    nothing would ever clear it -- `waiting` has no dwell and the process it
+    belongs to may live for days. Judged at read time so an update alone fixes
+    it, on every machine.
+    """
+    results = []
+    live = state.is_alive  # not exercised here; effective_state alone decides
+    nudge = "Claude is waiting for your input"
+    base = {"state": "waiting", "ts": NOW, "seen": NOW}
+
+    stuck = dict(base, detail=nudge, turn_over=None)
+    results.append(("an idle-nudge waiting with no turn is demoted to idle",
+                    state.effective_state(stuck, NOW) == "idle"))
+    stuck_after = dict(base, detail=nudge, turn_over=True)
+    results.append(("...and after a finished turn too",
+                    state.effective_state(stuck_after, NOW) == "idle"))
+    mid_turn = dict(base, detail=nudge, turn_over=False)
+    results.append(("mid-turn the same words still mean needs-you",
+                    state.effective_state(mid_turn, NOW) == "waiting"))
+    real_ask = dict(base, detail="Claude needs your permission to use Bash", turn_over=None)
+    results.append(("a permission ask is never demoted",
+                    state.effective_state(real_ask, NOW) == "waiting"))
+    return results
+
+
 def main() -> int:
     failures = 0
     # These cases are about dwells and priority, not liveness, so the liveness
@@ -284,7 +312,7 @@ def main() -> int:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  count ignores dwells          -> {counted['sessions']}")
 
-    live_results = liveness_checks() + idle_session_checks() + cpu_checks()
+    live_results = liveness_checks() + idle_session_checks() + cpu_checks() + stuck_waiting_checks()
     for name, ok in live_results:
         failures += not ok
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")

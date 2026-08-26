@@ -39,6 +39,10 @@ SESSION_TTL_SECONDS = 6 * 60 * 60
 #: event arriving after a turn ends would otherwise re-arm it forever, so this
 #: guarantees the pet unsticks itself. Long enough that a slow think between
 #: tool calls does not read as idle.
+#: Claude's idle nudge, which is not a request for anything. Mirrors
+#: `hook.IDLE_NOTIFICATION`; kept here too so `state` stays import-light.
+IDLE_NUDGE_TEXT = "waiting for your input"
+
 DWELL_SECONDS: dict[str, float] = {
     "waving": 3.0,
     "review": 20.0,
@@ -440,6 +444,16 @@ def effective_state(session: dict[str, Any], now: float) -> str:
     age = now - session.get("ts", 0.0)
     if dwell is not None and age > dwell:
         return "idle"
+
+    # A `waiting` that is only Claude's "you have not typed" nudge, recorded
+    # by a hook from before that nudge was ignored on never-prompted sessions.
+    # Left as-is it would hold `needs you` until the process died, since
+    # nothing else clears it. Judged here so existing state files heal on
+    # update without needing another event from that session.
+    if reported == "waiting" and session.get("turn_over") is not False:
+        detail = str(session.get("detail") or "").lower()
+        if IDLE_NUDGE_TEXT in detail:
+            return "idle"
 
     # `running` is the one state worth second-guessing, because it is the one
     # that gets left behind: a turn ended by an interrupt sends no `Stop`, and

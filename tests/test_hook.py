@@ -101,6 +101,26 @@ def notification_checks() -> list[tuple[str, bool]]:
         ("Notification", idle),
     ], "reprompted")
     results.append(("a new prompt reopens the turn", again.get("state") == "waiting"))
+
+    # Never prompted at all. Claude sends the same nudge to a session that has
+    # sat idle since it opened, and the VS Code extension opens sessions that
+    # sit exactly like that. It used to count -- the rule ignored the nudge
+    # only *after* a Stop -- so one idle panel put the pet on `needs you`,
+    # which never expires and outranks everything, and every click went to
+    # VS Code whatever terminal had actually finished.
+    fresh = run([
+        ("SessionStart", {}),
+        ("Notification", idle),
+    ], "never-prompted")
+    results.append(("an idle nudge on a never-prompted session is not needs-you",
+                    fresh.get("state") != "waiting"))
+    # ...while a genuine ask on the same fresh session still is.
+    fresh_ask = run([
+        ("SessionStart", {}),
+        ("Notification", asks),
+    ], "never-prompted-ask")
+    results.append(("...but a permission ask on it still is",
+                    fresh_ask.get("state") == "waiting"))
     return results
 
 

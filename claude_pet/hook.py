@@ -90,7 +90,17 @@ def _is_idle_nudge(payload: dict[str, Any], session_id: str) -> bool:
     if IDLE_NOTIFICATION not in message:
         return False
     session = state.read().get("sessions", {}).get(session_id)
-    return isinstance(session, dict) and session.get("turn_over") is True
+    # Only a turn actually in progress -- a prompt sent (`turn_over` False)
+    # and no `Stop` yet -- turns this wording into a real block. It used to be
+    # the other way round: ignored only after a `Stop`, so a session that had
+    # never been prompted at all counted as needing you. Claude sends this
+    # nudge after a minute of idling whether or not you ever typed, and the
+    # VS Code extension opens sessions that sit exactly like that -- so one
+    # idle panel put the pet on `needs you`, which never expires and outranks
+    # everything, and every click went to VS Code no matter which terminal
+    # had actually finished.
+    turn_over = session.get("turn_over") if isinstance(session, dict) else None
+    return turn_over is not False
 
 
 def _tool_failed(payload: dict[str, Any]) -> bool:
