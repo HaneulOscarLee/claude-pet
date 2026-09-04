@@ -361,6 +361,32 @@ def checks() -> list[tuple[str, bool]]:
     results.append(("an errand already at its target does not divide by zero", ok))
     window.walk_target = None
 
+    # The freeze that mattered most: a timer callback raised, GLib removed the
+    # source, and the pet sat there alive but never animating again. _tick must
+    # re-arm the next frame even when its body throws, and the guard must keep a
+    # repeating callback alive through an exception.
+    from claude_pet import overlay as _ov
+    scheduled = []
+    real_sched = window._schedule_frame
+    window._schedule_frame = lambda: scheduled.append(1)
+    real_body = window._tick_body
+    def boom():
+        raise ZeroDivisionError("bad frame")
+    window._tick_body = boom
+    try:
+        window._tick()  # must not raise, must still schedule the next frame
+        results.append(("a frame that throws still arms the next one", len(scheduled) == 1))
+    finally:
+        window._tick_body = real_body
+        window._schedule_frame = real_sched
+
+    kept = _ov._guard(lambda: (_ for _ in ()).throw(RuntimeError("x")), True)()
+    results.append(("a guarded callback survives an exception (keeps repeating)",
+                    kept is True))
+    ran = _ov._guard(lambda: 42, True)()
+    results.append(("...and passes the real return through when it does not",
+                    ran == 42))
+
     window._reset_tuning(slider_rows)
     results.append(("resetting puts every default back",
                     all(window.settings[key] == config.DEFAULTS[key]

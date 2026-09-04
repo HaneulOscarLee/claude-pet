@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -374,6 +375,26 @@ def trace(message: str) -> None:
         print(f"[claude-pet] {message}", flush=True)
 
 
+def _guard(func, keep):
+    """Wrap a GLib timeout callback so one exception cannot kill it for good.
+
+    A raised exception propagates out of the callback, and GLib then removes
+    the source -- so a single bad frame stopped the animation, a single bad
+    poll stopped state updates, and the pet sat there alive but frozen with
+    nothing on screen to say why (measured: a ZeroDivisionError in the motion
+    loop did exactly this). The error is logged to overlay.log and the source
+    kept alive with its intended repeat value, so the pet recovers on the next
+    tick instead of freezing until it is restarted.
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception:  # noqa: BLE001 -- a live pet beats a correct crash
+            traceback.print_exc()
+            return keep
+    return wrapper
+
+
 def _xid(menu) -> str:
     """X window id of a menu's toplevel, for matching against xwininfo."""
     toplevel = menu.get_toplevel()
@@ -541,11 +562,11 @@ class Overlay(Gtk.Window):
         self._place_initial()  # a move() before realize is not always honoured
         self._apply_input_shape()
         if poll:
-            GLib.timeout_add(POLL_INTERVAL_MS, self._poll_state)
+            GLib.timeout_add(POLL_INTERVAL_MS, _guard(self._poll_state, True))
             self._schedule_update_check()
             self._start_desktop_watch()
             self._start_tray()
-            GLib.timeout_add(CALL_POLL_MS, self._listen_for_a_call)
+            GLib.timeout_add(CALL_POLL_MS, _guard(self._listen_for_a_call, True))
             self.code_stamp = self._code_stamp()
             GLib.timeout_add_seconds(60, self._check_for_new_code)
             # First look soon after start, then every couple of minutes.
@@ -1174,6 +1195,18 @@ class Overlay(Gtk.Window):
         GLib.timeout_add(max(20, int(1000 / fps)), self._tick)
 
     def _tick(self) -> bool:
+        try:
+            self._tick_body()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        finally:
+            # Always arm the next frame. The whole freeze was this line being
+            # skipped when the body raised: no next frame, animation dead, the
+            # pet alive but stuck.
+            self._schedule_frame()
+        return False
+
+    def _tick_body(self) -> None:
         now = time.monotonic()
 
         if self.visual_until is not None and now >= self.visual_until:
@@ -1197,8 +1230,6 @@ class Overlay(Gtk.Window):
         self._update_look()
 
         self.queue_draw()
-        self._schedule_frame()
-        return False
 
     def _update_walk(self, now: float) -> None:
         if not self.settings.get("walk", True):
@@ -1245,7 +1276,7 @@ class Overlay(Gtk.Window):
             return
         self.motion_running = True
         self.moved_at = time.monotonic()
-        GLib.timeout_add(MOTION_POLL_MS, self._advance_motion)
+        GLib.timeout_add(MOTION_POLL_MS, _guard(self._advance_motion, True))
 
     def _advance_motion(self) -> bool:
         now = time.monotonic()
