@@ -154,6 +154,55 @@ def install(pet_id: str, destination_root: Path) -> dict[str, Any]:
     }
 
 
+def install_local(source: str | Path, destination_root: Path) -> dict[str, Any]:
+    """Install a pack from a local ``.codex-pet.zip`` (or plain ``.zip``) on disk.
+
+    The gallery installer trusts the id it asked for; here there is no such id,
+    so it is read from the archive's own ``pet.json`` -- the file name means
+    nothing (``shoga-strings.codex-pet.zip`` carried an id of ``neon-gif-cat``).
+    Only the two known members are ever read, by fixed name, so a crafted path
+    inside the zip cannot escape the destination.
+    """
+    path = Path(source).expanduser()
+    if not path.is_file():
+        raise RegistryError(f"{path}: no such file")
+    try:
+        archive = path.read_bytes()
+    except OSError as exc:
+        raise RegistryError(f"{path}: could not be read ({exc})") from exc
+
+    try:
+        bundle = zipfile.ZipFile(io.BytesIO(archive))
+    except zipfile.BadZipFile as exc:
+        raise RegistryError(f"{path.name}: not a valid zip") from exc
+
+    with bundle:
+        names = {Path(name).name: name for name in bundle.namelist()}
+        missing = [wanted for wanted in REQUIRED_FILES if wanted not in names]
+        if missing:
+            raise RegistryError(f"{path.name}: is missing {', '.join(missing)}")
+
+        try:
+            manifest = json.loads(bundle.read(names["pet.json"]).decode("utf-8"))
+        except ValueError as exc:
+            raise RegistryError(f"{path.name}: pet.json is not valid JSON") from exc
+        try:
+            pet_id = normalize_slug(manifest.get("id"))
+        except RegistryError as exc:
+            raise RegistryError(f"{path.name}: pet.json has no usable id ({exc})") from exc
+
+        directory = destination_root / pet_id
+        directory.mkdir(parents=True, exist_ok=True)
+        for wanted in REQUIRED_FILES:
+            (directory / wanted).write_bytes(bundle.read(names[wanted]))
+
+    return {
+        "id": pet_id,
+        "display_name": manifest.get("displayName") or pet_id,
+        "directory": directory,
+    }
+
+
 def install_collection(slug: str, destination_root: Path) -> list[dict[str, Any]]:
     collection = fetch_collection(slug)
     installed = []

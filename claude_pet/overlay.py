@@ -37,6 +37,13 @@ from . import pointer as pointer_visibility  # noqa: E402
 
 BUBBLE_WIDTH = 260
 BUBBLE_GAP = 8
+
+#: How small and large the pet may be made from the size slider, in on-screen
+#: pixels of sprite height. The default (config.DEFAULTS["height"]) sits inside
+#: this. Too small and it cannot be clicked; too large and it eats the screen.
+SIZE_MIN = 64
+SIZE_MAX = 320
+SIZE_STEP = 4
 POLL_INTERVAL_MS = 250
 
 #: How often the Claude Desktop app is looked for. It has no hooks to announce
@@ -111,6 +118,7 @@ LABELS: dict[str, dict[str, str]] = {
         "tune.call_size": "Call · circle size",
         "tune.call_roundness": "Call · how round",
         "tune.star_size": "Star · size needed",
+        "tune.size": "Pet · size",
         "menu.look": "Watch the pointer",
         "menu.notify": "Desktop notifications",
         "menu.autostart": "Start with Claude",
@@ -118,6 +126,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.exit_idle": "Quit when no sessions",
         "menu.browse": "Browse the gallery…",
         "menu.install": "Install a pet…",
+        "menu.install_file": "Install from a file…",
         "menu.remove": "Remove this pet…",
         "menu.update_check": "Check for updates…",
         "menu.update_current": "Up to date",
@@ -166,6 +175,7 @@ LABELS: dict[str, dict[str, str]] = {
         "menu.exit_idle": "세션 없으면 종료",
         "menu.browse": "갤러리 열기…",
         "menu.install": "펫 설치…",
+        "menu.install_file": "파일에서 설치…",
         "menu.remove": "이 펫 삭제…",
         "menu.update_check": "업데이트 확인…",
         "menu.update_current": "최신 버전",
@@ -203,6 +213,7 @@ LABELS: dict[str, dict[str, str]] = {
         "tune.call_size": "부르기 · 원 크기",
         "tune.call_roundness": "부르기 · 원형 정도",
         "tune.star_size": "별 · 필요한 크기",
+        "tune.size": "펫 · 크기",
         "menu.back": "‹ 뒤로",
         "menu.settings": "설정",
         "lang.auto": "자동",
@@ -516,6 +527,12 @@ class Overlay(Gtk.Window):
         self.flick = motion.Flick()
         #: Pending config write for a slider being dragged.
         self.tune_save: int | None = None
+        #: Pending pet-resize for the size slider being dragged. Rebuilding the
+        #: view rescales every frame, so it is debounced rather than run on
+        #: each of the many events one drag fires.
+        self.size_apply: int | None = None
+        #: The size slider itself, so "reset to defaults" can move it too.
+        self._size_scale: Gtk.Scale | None = None
         #: The tuning window, while it is open.
         self.tuning: Gtk.Window | None = None
         #: The 5h window (its resets_at) we have already warned about, so
@@ -1513,6 +1530,54 @@ class Overlay(Gtk.Window):
         config.update(**{key: self.settings[key] for key, *_rest in self.TUNABLE})
         return False
 
+    def _tune_size(self, value: float) -> None:
+        """Resize the pet from the size slider, debounced.
+
+        Unlike the gesture sliders, this rebuilds the scaled frames and the
+        window, so it is not run on every event of a drag; it settles first.
+        """
+        if self.size_apply is not None:
+            GLib.source_remove(self.size_apply)
+        self.size_apply = GLib.timeout_add(
+            120, _guard(lambda: self._apply_size(int(round(value))), keep=False)
+        )
+
+    def _apply_size(self, height: int) -> bool:
+        """Rescale the pet to `height` pixels tall, live, without a restart.
+
+        The pet is kept anchored by its feet -- the sprite's bottom centre stays
+        put -- so growing it does not shove it across the screen or off the
+        floor, and the window is resized and clamped to match.
+        """
+        self.size_apply = None
+        height = max(SIZE_MIN, min(SIZE_MAX, int(height)))
+        if height != self.view.height:
+            old_centre_x = self.sprite_x + self.view.width // 2
+            old_bottom_y = self.sprite_y + self.view.height
+            try:
+                self.view = PetView(self.view.pet, height)
+            except sprites.SpriteError:
+                return False
+
+            self.window_width = max(self.view.width, BUBBLE_WIDTH)
+            self.window_height = self.view.height + BUBBLE_GAP + 78
+            self.sprite_left = (self.window_width - self.view.width) // 2
+            self.bubble_space = self.window_height - self.view.height
+            self.sprite_top = 0 if self.bubble_below else self.bubble_space
+            self.set_size_request(self.window_width, self.window_height)
+            self.set_default_size(self.window_width, self.window_height)
+            self.resize(self.window_width, self.window_height)
+
+            self._place_sprite(
+                old_centre_x - self.view.width // 2, old_bottom_y - self.view.height
+            )
+            self._apply_input_shape()
+            self.queue_draw()
+
+        self.settings["height"] = height
+        config.update(height=height)
+        return False
+
     def _slider_row(self, key: str, low: float, high: float,
                     step: float, digits: int) -> Gtk.Widget:
         """One labelled slider, applied as it moves."""
@@ -1531,6 +1596,27 @@ class Overlay(Gtk.Window):
         holder.pack_start(scale, False, False, 0)
         holder.scale = scale
         holder.tune_key = key
+        return holder
+
+    def _size_row(self) -> Gtk.Widget:
+        """The pet-size slider. Separate from the gesture sliders because it
+        rebuilds the view rather than the gesture detectors."""
+        holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        holder.set_margin_start(12)
+        holder.set_margin_end(12)
+        label = Gtk.Label(label=self.labels["tune.size"])
+        label.set_alignment(0.0, 0.5)
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, SIZE_MIN, SIZE_MAX, SIZE_STEP
+        )
+        scale.set_digits(0)
+        scale.set_value(self._number("height", config.DEFAULTS["height"]))
+        scale.set_size_request(260, -1)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.connect("value-changed", lambda widget: self._tune_size(widget.get_value()))
+        holder.pack_start(label, False, False, 0)
+        holder.pack_start(scale, False, False, 0)
+        self._size_scale = scale
         return holder
 
     def _open_tuning(self) -> None:
@@ -1554,6 +1640,9 @@ class Overlay(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.set_margin_top(10)
         box.set_margin_bottom(10)
+        # Size first: it is the one most people came here to change.
+        box.pack_start(self._size_row(), False, False, 2)
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 4)
         rows = [self._slider_row(key, low, high, step, digits)
                 for key, low, high, step, digits in self.TUNABLE]
         for holder in rows:
@@ -1567,6 +1656,7 @@ class Overlay(Gtk.Window):
 
         def forget(*_args) -> bool:
             self.tuning = None
+            self._size_scale = None
             return False
 
         window.connect("destroy", forget)
@@ -1582,6 +1672,12 @@ class Overlay(Gtk.Window):
             self.settings[key] = config.DEFAULTS[key]
         self._rebuild_gestures()
         self._save_tuning()
+        # Size resets too -- it lives in the same window and "defaults" should
+        # mean all of it. Moving the slider fires value-changed, which resizes.
+        if self._size_scale is not None:
+            self._size_scale.set_value(config.DEFAULTS["height"])
+        else:
+            self._apply_size(config.DEFAULTS["height"])
         # Move the sliders themselves, or the window would show the old values
         # while the pet behaved by the new ones.
         for holder in rows:
@@ -2123,6 +2219,7 @@ class Overlay(Gtk.Window):
             entries.append(("separator",))
             entries.append(("action", self.labels["menu.browse"], self._open_gallery))
             entries.append(("action", self.labels["menu.install"], self._install_pack))
+            entries.append(("action", self.labels["menu.install_file"], self._install_pack_from_file))
             entries.append(("action", self.labels["menu.remove"], self._remove_pack))
             return entries
 
@@ -2396,6 +2493,72 @@ class Overlay(Gtk.Window):
             return False
 
         self._in_background(work, done)
+
+    def _install_pack_from_file(self) -> None:
+        """Install a pack from a .codex-pet.zip picked off disk.
+
+        The counterpart to the gallery installer for a pack someone was handed
+        as a file. A file chooser rather than a typed path: nobody wants to type
+        an absolute path into a tiny entry, and the chooser cannot get it wrong.
+        """
+        from . import registry
+
+        path = self._ask_file()
+        if not path:
+            return
+
+        name = Path(path).name
+        self.busy = name
+        self._flash(f"{name}…", seconds=120)
+
+        def work():
+            installed = registry.install_local(path, config.claude_home() / "pets")
+            sprites.load_pet(installed["directory"])
+            return installed["id"]
+
+        def done(installed, error):
+            self.busy = ""
+            if error is not None:
+                self._flash(self.labels["toast.failed"].format(reason=error))
+                return False
+            self.settings["pet"] = installed
+            config.update(pet=installed)
+            self._flash(self.labels["toast.installed"].format(pet=installed))
+            self.quit(restart=True)
+            return False
+
+        self._in_background(work, done)
+
+    def _ask_file(self) -> str | None:
+        """A modal file chooser for a .codex-pet.zip. Returns a path or None."""
+        dialog = Gtk.FileChooserDialog(
+            title=self.labels["menu.install_file"].rstrip("… "),
+            transient_for=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.set_keep_above(True)
+        dialog.add_button(self.labels["dialog.cancel"], Gtk.ResponseType.CANCEL)
+        dialog.add_button(self.labels["dialog.ok"], Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+
+        zips = Gtk.FileFilter()
+        zips.set_name("*.zip")
+        zips.add_pattern("*.zip")
+        dialog.add_filter(zips)
+
+        downloads = Path("~/Downloads").expanduser()
+        if downloads.is_dir():
+            dialog.set_current_folder(str(downloads))
+
+        # The pet window refuses focus and a transient dialog inherits it, so
+        # the chooser has to be presented explicitly to take the keyboard.
+        dialog.show_all()
+        dialog.set_accept_focus(True)
+        dialog.present()
+        response = dialog.run()
+        path = dialog.get_filename() if response == Gtk.ResponseType.OK else None
+        dialog.destroy()
+        return path
 
     def _remove_pack(self) -> None:
         import shutil

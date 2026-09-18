@@ -102,9 +102,19 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     root = _install_root(args)
     failures = 0
-    for pet_id in args.pet_ids:
+    first_installed: str | None = None
+    for spec in args.pet_ids:
+        # A local file -- a downloaded .codex-pet.zip -- installs from disk; a
+        # bare id or gallery link goes to codex-pets.net. A path that ends in
+        # .zip but is not there is still treated as a local install so the error
+        # is "no such file", not a confusing lookup of it as a pet id.
+        local = spec.endswith(".zip") or Path(spec).expanduser().is_file()
         try:
-            installed = registry.install(pet_id, root)
+            installed = (
+                registry.install_local(spec, root)
+                if local
+                else registry.install(spec, root)
+            )
         except registry.RegistryError as exc:
             print(f"claude-pet: {exc}", file=sys.stderr)
             failures += 1
@@ -112,19 +122,21 @@ def cmd_add(args: argparse.Namespace) -> int:
         try:
             pet = sprites.load_pet(installed["directory"])
         except sprites.SpriteError as exc:
-            print(f"claude-pet: installed {pet_id}, but its spritesheet will not load: {exc}", file=sys.stderr)
+            print(f"claude-pet: installed {installed['id']}, but its spritesheet will not load: {exc}", file=sys.stderr)
             failures += 1
             continue
+        if first_installed is None:
+            first_installed = pet.id
         print(
             f"installed  {pet.id}  ({pet.display_name}, v{pet.version}, "
             f"{sum(pet.frame_counts.values())} frames) -> {installed['directory']}"
         )
-    if not failures and args.pet_ids:
+    if not failures and first_installed is not None:
         settings = config.load()
         if not settings.get("pet"):
-            settings["pet"] = args.pet_ids[0]
+            settings["pet"] = first_installed
             config.save(settings)
-            print(f"active pet set to {args.pet_ids[0]}")
+            print(f"active pet set to {first_installed}")
     return 1 if failures else 0
 
 
@@ -1453,8 +1465,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--version", choices=["1", "2"])
     search.set_defaults(func=cmd_search)
 
-    add = subparsers.add_parser("add", help="install packs from codex-pets.net")
-    add.add_argument("pet_ids", nargs="+", metavar="PET_ID")
+    add = subparsers.add_parser(
+        "add", help="install packs from codex-pets.net, or a local .codex-pet.zip"
+    )
+    add.add_argument("pet_ids", nargs="+", metavar="PET_ID_OR_ZIP")
     add.add_argument("--codex-home", action="store_true", help="install into ~/.codex/pets instead")
     add.set_defaults(func=cmd_add)
 

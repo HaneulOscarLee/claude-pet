@@ -400,6 +400,32 @@ def checks() -> list[tuple[str, bool]]:
                         for holder in slider_rows)))
     window.tuning.destroy()
     results.append(("closing it lets it open again", window.tuning is None))
+
+    # The pet can be resized live: _apply_size rescales the frames and the
+    # window without a restart. The slider debounces through a timer, but the
+    # apply itself is direct, which is what a headless test can drive. Done last,
+    # after the reset checks, because each apply writes the height through the
+    # stubbed config.update and would otherwise count against "written once".
+    small = window.view.height
+    writes_before = len(written)
+    window._apply_size(overlay.SIZE_MAX)
+    results.append(("the pet grows when resized",
+                    window.view.height == overlay.SIZE_MAX > small))
+    results.append(("...and the window grows with it",
+                    window.window_height == window.view.height + overlay.BUBBLE_GAP + 78))
+    results.append(("...staying on a screen",
+                    window._on_screen(window.sprite_x, window.sprite_y)))
+    window._apply_size(9999)
+    results.append(("an over-large size is clamped to the maximum",
+                    window.view.height == overlay.SIZE_MAX))
+    window._apply_size(1)
+    results.append(("...and a tiny one to the minimum",
+                    window.view.height == overlay.SIZE_MIN))
+    results.append(("resizing writes the height",
+                    any("height" in entry for entry in written[writes_before:])))
+    window._apply_size(config.DEFAULTS["height"])
+    results.append(("it goes back to the default size",
+                    window.view.height == config.DEFAULTS["height"]))
     return results
 
 
